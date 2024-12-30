@@ -1,7 +1,7 @@
 from dotenv import load_dotenv
 # set your OPENAI_API_KEY in .env file
 load_dotenv()
-
+import prompts
 from llama_index.llms.openai import OpenAI
 from datetime import datetime
 from pydantic import BaseModel, Field
@@ -26,19 +26,9 @@ from enum import Enum
 import json
 from bson import ObjectId
 
-class DatabaseSchema(BaseModel):
-    flight_code: Optional[str] = None
-    departure_time: Optional[str] = None
-    arrival_time: Optional[str] = None
-    departure_location: Optional[str] = None
-    arrival_location: Optional[str] = None
-    airline: Optional[str] = None
-    ticket_price: Optional[int] = None
-    
-class MongoSchema(BaseModel):
+class FlightSchema(BaseModel):
     date:Optional[str] = None
     scheduled_time:Optional[str] = None
-    #departure_time:Optional[str] = None
     flight_id:Optional[str] = None
     counter:Optional[str] = None
     gate:Optional[str] = None
@@ -47,6 +37,7 @@ class MongoSchema(BaseModel):
     departure_airport:Optional[str] = None
     arrival_airport:Optional[str] = None
     airline:Optional[str] = None
+
 '''
 schema = StructType([
         StructField("departure_time", StringType(), True),
@@ -61,6 +52,16 @@ schema = StructType([
     ])
 '''
 
+class BookingSchema(BaseModel):
+    user_name: str
+    user_phone: str
+    user_email: str
+    date_book: str
+    flight_id: str
+    
+class FlightReceipt(BaseModel):
+    booking_info: BookingSchema
+    flight_info: FlightSchema
 
 class ConnectDB_Event(Event):
     payload: str 
@@ -72,13 +73,13 @@ class ParseInput_Event(Event):
     payload: str
 
 class QueryGeneration_Event(Event):
-    payload: str
+    payload: FlightSchema | BookingSchema  
 
 class PostProcessQuery_Event(Event):
-    payload: str
+    payload: str | dict
 
 class QueryGenerationComplete_Event(Event):
-    payload: str
+    payload: str | dict
     
 class RetrieveEvent(Event):
     payload: str
@@ -96,7 +97,7 @@ class MongoEncoder(json.JSONEncoder):
 
 class MongoDBflow(Workflow):
     @step 
-    async def start(self, ctx: Context ,ev: StartEvent) -> ConnectDB_Event | QueryGeneration_Event :
+    async def start(self, ctx: Context, ev: StartEvent) -> ConnectDB_Event | QueryGeneration_Event :
 
         MONGO_DB = "flight_db"  
         COLLECTION_NAME = "flight_info"  
@@ -114,12 +115,16 @@ class MongoDBflow(Workflow):
         await ctx.set('LLM', LLM)
 
         try:
-            query_string = ev.query.replace("'", '"')
-            db_query = json.loads(query_string)
+            query_str = ev.query
+            if isinstance(query_str, str):
+                query_str = query_str.replace("'", '"')
+            query_str = json.dumps(query_str)
+            db_query = json.loads(query_str)
+            
         except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid query format: {ev.query}") from e
+            raise ValueError(f"Invalid query format: {query_str}") from e
 
-        print(f'Initial query: {db_query}')
+        #print(f'Initial query: {db_query}')
         await ctx.set('mongoDB_query', db_query)
 
         ctx.send_event(ConnectDB_Event(payload=''))
@@ -128,6 +133,7 @@ class MongoDBflow(Workflow):
     @step
     async def checking_query(self, ctx: Context, ev: QueryGeneration_Event) -> QueryGenerationComplete_Event:
         # PERFORM CHECKING VALID QUERY
+        # ensure all field are filled
         if not isinstance(ev.payload, dict):
             raise ValueError("Input is not valid query object")
         
@@ -169,8 +175,9 @@ class MongoDBflow(Workflow):
                 else:
                     final_query[key] = value
             
-            print(f'Final Query: {final_query}')
+            #print(f'Final Query: {final_query}')
             retrieved_data = collection.find(final_query).to_list(length=None)
+
             await ctx.set('retrieved_data', retrieved_data)
 
             return CleanUp(payload='Retrieving data success')
@@ -184,7 +191,7 @@ class MongoDBflow(Workflow):
 
         if client:
             client.close()
-            print("MongoDB client closed.")
+            #print("MongoDB client closed.")
         
         if not retrieved_data: # empty list
             formatted_string = 'No data retrieved, tell user there is no flights available.'
@@ -200,6 +207,89 @@ class MongoDBflow(Workflow):
 # "route": "from NYC to LAX",
 
 
+class BookFlow(MongoDBflow):
+    @step 
+    async def start(self, ctx: Context, ev: StartEvent) -> ConnectDB_Event | QueryGeneration_Event :
+        MONGO_DB = "flight_db"  
+        COLLECTION_NAME = "booking_info"  
+        CONNECTION_STRING = "mongodb://localhost:27017" 
+
+        LLM = OpenAI(
+            model='gpt-3.5-turbo',
+            logprobs=None,  
+            default_headers={},  
+        )
+    
+        await ctx.set('MONGO_DB', MONGO_DB)
+        await ctx.set('COLLECTION_NAME', COLLECTION_NAME)
+        await ctx.set('CONNECTION_STRING', CONNECTION_STRING)
+        await ctx.set('LLM', LLM)
+
+        try:
+            query_str = ev.query
+            #print(f'query_str: {query_str}, type: {type(query_str)}') 
+
+            query_str = query_str.replace("'", '"')    
+            db_query = json.loads(query_str)
+            
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid query format: {query_str}") from e
+
+        #print(f'Initial query: {db_query}, type: {type(db_query)}')
+        await ctx.set('mongoDB_query', db_query)
+
+        ctx.send_event(ConnectDB_Event(payload=''))
+        ctx.send_event(QueryGenerationComplete_Event(payload=''))
+
+    @step
+    async def retrieve_mongoClient(self, ctx: Context, ev: ConnectDBComplete_Event | QueryGenerationComplete_Event) -> CleanUp:
+        if ctx.collect_events(ev, [ConnectDBComplete_Event, QueryGenerationComplete_Event]) is None:
+            return None
+        try: 
+            collection = await ctx.get('collection', None)
+            mongoDB_query = await ctx.get('mongoDB_query', None)
+            
+            if collection is None or mongoDB_query is None :
+                return CleanUp(payload='Submit booking data failed: Missing required context data')
+            
+            flight_id_val = mongoDB_query['flight_id']
+            w = MongoDBflow(timeout=30, verbose=False)
+            flight_info = await w.run(query= {'flight_id': flight_id_val})
+            await ctx.set('flight_info', flight_info)
+
+            #print(f'Flight Info: {flight_info}')
+            #print(f'Final Query: {mongoDB_query}')
+            
+            collection.insert_one(mongoDB_query)
+            return CleanUp(payload='Submit booking data success')
+        except Exception as e:
+            print(f"Error during booking submission: {str(e)}")
+            return CleanUp(payload='Submit booking data failed')
+
+    @step
+    async def clean_up(self, ctx: Context, ev: CleanUp) -> StopEvent:
+        client = await ctx.get('mongo_client', None)
+        submit_form = await ctx.get('mongoDB_query', None)
+        flight_info = await ctx.get('flight_info', None)
+
+        if client:
+            client.close()
+            print("MongoDB client closed.")
+        
+        if ev.payload == 'Submit booking data failed':  # empty list
+            result = 'Booking submission has failed, please try again'
+        else:
+            if not submit_form:
+                receipt_form = "No booking information available."
+            else: 
+                receipt_form = f"""
+            User information: {submit_form},\nBooked flight information: {flight_info}
+""".strip()
+            result = f'Booking submission has succeeded. Booking Receipt: \n{receipt_form}\nEnjoy your flights.'
+        
+        observation = f"\n{result}"
+        return StopEvent(result=observation)
+
 class IntentType(str, Enum):
     QUERY = "query"
     BOOKING = "booking"
@@ -210,34 +300,21 @@ class IntentClassification(BaseModel):
     intent: IntentType
     confidence: float = 1.0
 
-intent_classification_prompt = PromptTemplate(
-    """
-    As a flight assistant, classify the user's intent into one of these categories:
-    1. QUERY - User wants to search for flight information (schedules, status, etc.)
-    2. BOOKING - User wants to book a flight
-    3. REGULATION - User is asking about airline regulations or travel requirements
-    4. UNKNOWN - Cannot determine the user's intent clearly
+intent_classification_prompt = PromptTemplate(prompts.PARSE_PROMPTS_INTENTION)
 
-    User input: {text}
-
-    Respond with the intent classification in the following JSON format:
-    {
-        "intent": "QUERY|BOOKING|REGULATION|UNKNOWN",
-        "confidence": <float between 0 and 1>
-    }
-    """
-)
+class Booking_Event(Event):
+    payload: str
 
 class GatherInformation(Workflow):
     @step
-    async def start(self, ctx: Context, ev: StartEvent) -> ParseInput_Event | StopEvent:
+    async def start(self, ctx: Context, ev: StartEvent) -> ParseInput_Event | StopEvent | Booking_Event:
         LLM = OpenAI(
             model='gpt-3.5-turbo',
             logprobs=None,
             default_headers={},
         )
         await ctx.set('LLM', LLM)
-        print(f'User input: {ev.query}')
+        #print(f'User input: {ev.query}')
         
         intent_classification = LLM.structured_predict(
             IntentClassification,
@@ -245,79 +322,54 @@ class GatherInformation(Workflow):
             text=ev.query
         )
         
+        await ctx.set('Intent', intent_classification.intent)
+
         print(f"Detected intent: {intent_classification.intent} with confidence: {intent_classification.confidence}")
         
-        if intent_classification.intent == IntentType.QUERY:
-            await ctx.set('user_query', ev.query)
-            return ParseInput_Event(payload=ev.query)
+        if intent_classification.intent == IntentType.QUERY or intent_classification.intent == IntentType.BOOKING:
+            return ParseInput_Event(payload=ev.query) #  RETRIEVE TASK
+        
         elif intent_classification.intent == IntentType.BOOKING:
-            return StopEvent(result="I apologize, but flight booking is not available at the moment. Please contact our customer service or visit our website for booking assistance.")
+            return Booking_Event(payload=ev.query) # BOOKING TASK
+        
         elif intent_classification.intent == IntentType.REGULATION:
-            regulation_prompt = PromptTemplate(
-                """
-                As a flight assistant, provide information about the airline regulation or requirement that the user is asking about.
-                Be concise but comprehensive in your response.
-                
-                User query: {text}
-                
-                Provide a helpful response about the relevant regulations:
-                """
-            )
+            regulation_prompt = PromptTemplate(prompts.PARSE_PROMPTS_REGULATION)
             regulation_response = LLM.complete(regulation_prompt, text=ev.query)
-            return StopEvent(result=str(regulation_response))
+            return StopEvent(result=str(regulation_response)) # REGULATION TASK
         else:
             return StopEvent(result="I'm not sure what you're asking for. Could you please rephrase your question? You can ask me about flight schedules, airline regulations, or general flight information.")
 
     @step
+    async def booking_action(self, ctx: Context, ev: Booking_Event) -> QueryGenerationComplete_Event:
+        llm = await ctx.get('LLM')
+        user_query = ev.payload
+
+        simplified_prompt = PromptTemplate(prompts.PARSE_PROMPTS_BOOKING)
+
+        extracted_input = llm.structured_predict( BookingSchema, simplified_prompt, text= user_query)
+        #print(f'Book extracted: {extracted_input}')
+
+        if not isinstance(extracted_input, BaseModel):
+            raise ValueError("Parsed input is not a valid Pydantic object.")
+        
+        return StopEvent(result='Please provide more information')
+
+    @step
     async def parse_userQuery(self, ctx: Context, ev: ParseInput_Event) -> QueryGeneration_Event:
+        
+        intent = await ctx.get('Intent')
+        if intent == IntentType.QUERY:
+            simplified_prompt = PromptTemplate(prompts.PARSE_PROMPTS_RETRIVE)
+            target_schema = FlightSchema
+        if intent == IntentType.BOOKING:
+            simplified_prompt = PromptTemplate(prompts.PARSE_PROMPTS_BOOKING)
+            target_schema = BookingSchema
 
-        simplified_prompt = PromptTemplate(
-    """
-    You are a helpful flight attendant. If you encounter time-related terms like 'yesterday', 'tomorrow', 'today', or a specific date, extract them as they are and map them to `departure_time` or `arrival_time` where applicable.
-    Extract the following information from the query below. If any field is not explicitly mentioned in the query, set it as `null`. Follow the schema strictly for the JSON response:
-    
-    **Schema:**
-    - `date` (string): The date associated with the flight, including terms like 'today', 'tomorrow', or specific dates (e.g., '2024-12-25').
-    - `scheduled_time` (string): The scheduled time of the flight, if mentioned (e.g., '14:30').
-    - `flight_id` (string): The flight's identifier.
-    - `status` (string): The flight's status. (always query flights have status open)
-    - `departure_region_name` (string): the departure region.(non-accented form)
-    - `arrival_region_name` (string): the arrival region.(non-accented form)
-    - `airline` (string): the flight's airline.(standardized international airline name)
-    Example Query:
-    "i want to find flights from Đà Nẵng to Hồng Kông tomorrow by vietjet."
-
-    Example Response:
-    ```json
-    {
-        "date": "tomorrow",
-        "scheduled_time": null,
-        "flight_id": null,
-        "counter": null,
-        "gate": null,
-        "status": "OPN",
-        "departure_region_name": "Da Nang",
-        "arrival_region_name": "Hong Kong",
-        "airline": "VietJet Air"
-    }
-    ```
-
-    Now, process the following query and respond as a JSON object:
-
-    Query: {text}
-
-    Respond:
-    """
-    )
         try:
             llm = await ctx.get('LLM')
-            user_query = await ctx.get('user_query')
-            extracted_input = llm.structured_predict( MongoSchema, simplified_prompt, text= ev.payload)
-
-            print(f"Extracted input: {extracted_input}")
-            
-            await ctx.set('extracted_input', extracted_input)
-            return QueryGeneration_Event(payload='')
+            extracted_input = llm.structured_predict( target_schema, simplified_prompt, text=ev.payload)
+            #print(f"Extracted input: {extracted_input}")
+            return QueryGeneration_Event(payload=extracted_input)
         
         except Exception as e:
             raise ValueError(f"Failed to parse query: {str(e)}")
@@ -326,21 +378,19 @@ class GatherInformation(Workflow):
     async def generate_query(self, ctx: Context, ev: QueryGeneration_Event) -> PostProcessQuery_Event:
         
         #pydantic object
-        parsed_input = await ctx.get('extracted_input')
-
+        parsed_input = ev.payload
+        
         if not isinstance(parsed_input, BaseModel):
             raise ValueError("Parsed input is not a valid Pydantic object.")
-    
-        # Assuming 'model' is your Pydantic object
-        mongoDB_query = parsed_input.model_dump(exclude_none=True)
 
-        if not isinstance(mongoDB_query, dict):
+        # Assuming 'model' is your Pydantic object
+        query = parsed_input.model_dump(exclude_none=True)
+
+        if not isinstance(query, dict):
             raise ValueError("Generated query is not a valid MongoDB query object.")
         
-        await ctx.set('mongoDB_query', mongoDB_query)
-
-        print(f"Initial MongoDB query: {mongoDB_query}")
-        return PostProcessQuery_Event(payload="Generated Initial Query success")
+        #print(f"Initial Query: {query}")
+        return PostProcessQuery_Event(payload=query)
         
     
     @step
@@ -356,17 +406,22 @@ class GatherInformation(Workflow):
             return parsed
 
         #print(ev.payload)
-        tmp = await ctx.get('mongoDB_query')
-
+        
+        tmp = ev.payload
         '''
         "departure_time": departure_time.strftime("%Y-%m-%d %H:%M"),
         "arrival_time": arrival_time.strftime("%Y-%m-%d %H:%M")
         '''
         
         departTime = tmp.get('departure_time', None)
+        datebookTime = tmp.get('date_book', None)
         scheduleTime = tmp.get('scheduled_time', None)  # Default to None if the key doesn't exist
         updatedTime = tmp.get('updated_time', None)
         dateTime = tmp.get('date', None)
+
+        if datebookTime is not None:
+            parsedDatebook = parseTime(datebookTime)
+            tmp['date_book'] = parsedDatebook
 
         if departTime is not None:
             parsedDepart = parseTime(departTime)
@@ -384,20 +439,21 @@ class GatherInformation(Workflow):
             parsedUpdated = parseTime(updatedTime)
             tmp['updated_time'] = parsedUpdated
 
-        mongoDB_query = tmp
+        query = tmp
         
-        await ctx.set('mongoDB_query', mongoDB_query)
-        print(f"Final MongoDB query: {mongoDB_query}")
+        #print(f"Final query: {query}")
 
-        return QueryGenerationComplete_Event(payload='')
-
+        return QueryGenerationComplete_Event(payload=query)
 
     @step
     async def query_output(self, ctx: Context, ev: QueryGenerationComplete_Event) -> StopEvent:
-        mongoDB_query = await ctx.get('mongoDB_query')
-        observation = f'MongDB query: {mongoDB_query}'
+        query = ev.payload
+        intent = await ctx.get('Intent')
+        observation = f'Query: {query}, Intent: {intent.value}.'
         return StopEvent(result=observation)
 
+
+######################################################################################################
 async def prepare_input(user_query: str) -> dict:
     w = GatherInformation(timeout=30, verbose=False)
     result = await w.run(query= user_query)
@@ -406,6 +462,11 @@ async def prepare_input(user_query: str) -> dict:
 async def read_mongodb(mongodb_query: str) -> str: 
     w = MongoDBflow(timeout=30, verbose=False)
     result = await w.run(query= mongodb_query)
+    return result
+
+async def submit_booking(booking_query: str) -> str:
+    w = BookFlow(timeout=30, verbose=False)
+    result = await w.run(query=booking_query)
     return result
 
 from llama_index.agent.openai import OpenAIAgent
@@ -418,7 +479,15 @@ async def main():
         async_fn=read_mongodb,
         name='MongoDB_Retriever',
         description=(
-            'Tool to retrieve information from the MongoDB database. This tool is used after generating a valid MongoDB query.'
+            'Tool to retrieve information from the MongoDB database. This tool is used after got a valid MongoDB query.'
+        )
+    )
+
+    booking_submit_tool = FunctionTool.from_defaults(
+        async_fn=submit_booking,
+        name="SubmitBooking_Tool",
+        description=(
+            'Tool to submit booking information to MongoDB database. This tool is used to after got a valid MongoDB query.'
         )
     )
 
@@ -427,12 +496,12 @@ async def main():
         async_fn=prepare_input,
         name='Query_Prep',
         description=(
-            'Tool to generate a MongoDB query from user input. Ensure user input is complete and accurate before invoking this tool.'
+            'Tool to generate a Query from user input. Ensure user input is complete and accurate before invoking this tool.'
         )
     )
 
     # Define the toolset (add more tools here if needed)
-    tools = [prepare_input_tool, read_mongodb_tool]
+    tools = [prepare_input_tool, read_mongodb_tool, booking_submit_tool]
 
     # Initialize the OpenAI language model
     llm = OpenAI(
@@ -441,92 +510,8 @@ async def main():
         default_headers={},  # Thêm tham số này
     )
 
-    # System prompt for the agent
-    SYSTEM_PROMPT = """
-    You are a diligent flight assistant. Your job is to assist users in retrieving accurate and up-to-date 
-    flight information from the database. Follow these guidelines:
-    
-    1. **Clarify User Input**:
-       - User must provide information about departure date, departure region, arrival region before proceed to the retrieving step.
-       - If the user's input is unclear or lacks sufficient details to form a query, ask follow-up questions then from a proper final user input string.
-       - Confirm with the user before proceeding if you are unsure.
-       - Final user input must be in natural language, do not perform any conversion, keep everything as it is.
-
-    2. **Prepare Database Queries**:
-       - Use the `Query_Prep` tool to generate a proper MongoDB query from the user's input. Result in json format.
-
-    3. **Retrieve Information**:
-       - Use the `MongoDB_Retriever` tool to fetch real-time data from the database.
-       - Do not rely on assumptions or generate fake data; only provide verified information.
-
-    4. **Communicate Clearly**:
-       - Respond to the user with information retrieved from the database in a concise and professional manner.
-       - Offer additional assistance if necessary.
-    """.strip()
-    
-    DEMO_PROPMPT = '''
-    You are a diligent and professional flight assistant tasked with retrieving accurate and up-to-date flight information. Follow these step-by-step guidelines to assist users effectively:
-    1. **Clarify User Input**:
-        - Ensure the user provides the following mandatory information, if not, ask for confirmation on mandatory details:
-            - **Departure date**: The user should mention when they want to travel (e.g., "today," "tomorrow," or a specific date), must provide one date-related information.
-            - **Departure region**: The user should specify where they are departing from (e.g., "Ha Noi"), must provide one specific region.
-            - **Arrival region**: The user should specify the destination (e.g., "Da Nang"), must provide one specific region.
-        - If all mandatory details (Departure date, Departure region, Arrival region) are provided, with included any optional details (such as the airline). Then, immediatly move to step 2 with the most updated information, explicitly listing every detail in the final output, without reconfirming with user.
-        - If you are unsure about anything, then ask user for confirmation:
-            - Example: "Thank you! You are searching for flights from DAD to HAN on tomorrow by Vietnam Airlines. Is that correct?"
-            - Ensure that the **final user input remains in its original, natural language form** (e.g., "flights from DAD to HAN tomorrow by Vietnam Airlines").
-        - If any required details are missing:
-            - Politely ask follow-up questions while retaining and using previously provided information, **ensure the final query includes all previously stated and newly provided details**:.
-                - If mandatory details were already given:
-                    - Example 1: The user previously mentioned "from Da Nang to Ha Noi" and now adds "today." Combine them: "You are searching for flights from Da Nang to Ha Noi today. Is that correct?"       
-        - If the user provides terms like "tomorrow," "today," "next week," etc., you **do not convert** these terms to a date. Keep them as is.
-        
-    2. **Prepare Database Queries**:
-        - Once the user has provided a complete query with all necessary information, pass the **exact same query** (in natural language format) to the **Query_Prep** tool. The format should be as stated by the user (e.g., "flights from DAD to HAN tomorrow").
-        - Use the `Query_Prep` tool to create a MongoDB query that matches the user's input. 
-        - The query must:
-            - Be in JSON format.
-            - Include all mandatory fields (departure date, departure region, arrival region).
-        - Example of a properly formatted query:
-        ```json
-        {
-            "departure_region": "JFK",
-            "arrival_region": "LAX",
-            "departure_date": "2024-12-25"
-        }
-        ```
-
-    3. **Retrieve Flight Information**:
-        - Use the `MongoDB_Retriever` tool to fetch data based on the prepared query.
-        - Ensure all information retrieved is accurate and verified.
-        - Do not generate or assume flight data.
-
-    4. **Respond to the User**:
-        - Clearly communicate the retrieved information. Include:
-            - Flight number
-            - Departure and arrival times
-            - Departure and arrival airports
-            - Gate and terminal details (if available)
-            - Flight status (e.g., on-time, delayed)
-        - Example response:
-            - "Here is the flight information for your query: Flight DL123 will depart from JFK on 2024-12-25 at 14:00 and arrive at LAX. Terminal 4, Gate 23. Status: On-Time."
-        - Offer further assistance if necessary:
-            - "Would you like me to help with another flight search?"
-
-    5. **Handle Errors Gracefully**:
-        - If no flights are found, respond politely:
-            - Example: "I couldn’t find any flights matching your criteria. Would you like to adjust the search?"
-        - If the database retrieval fails, apologize and suggest trying again:
-            - Example: "I'm having trouble retrieving the flight data right now. Can I try again for you?"
-
-    6. **Follow Professional Communication Standards**:
-        - Be concise and polite in all responses.
-        - Avoid technical jargon when speaking to users.
-        - Always prioritize the user's needs and provide additional help where possible.
-    '''.strip()
-
     # Initialize the agent with tools and prompt
-    agent = OpenAIAgent.from_tools(tools, llm=llm, verbose=True, system_prompt=DEMO_PROPMPT)
+    agent = OpenAIAgent.from_tools(tools, llm=llm, verbose=True, system_prompt=prompts.SYSTEM_PROMPT)
 
     def cleanup():
         pass
@@ -542,6 +527,7 @@ async def main():
 
             # Run the agent and handle user queries
             response = agent.chat(user_input)
+
             print(f"AGENT: {response}")
     except KeyboardInterrupt:
         print("\nExiting. Goodbye!")
