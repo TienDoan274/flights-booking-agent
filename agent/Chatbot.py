@@ -36,7 +36,9 @@ class DatabaseSchema(BaseModel):
     ticket_price: Optional[int] = None
     
 class MongoSchema(BaseModel):
-    departure_time:Optional[str] = None
+    date:Optional[str] = None
+    scheduled_time:Optional[str] = None
+    #departure_time:Optional[str] = None
     flight_id:Optional[str] = None
     counter:Optional[str] = None
     gate:Optional[str] = None
@@ -360,21 +362,27 @@ class GatherInformation(Workflow):
         "departure_time": departure_time.strftime("%Y-%m-%d %H:%M"),
         "arrival_time": arrival_time.strftime("%Y-%m-%d %H:%M")
         '''
-        departTime = tmp.get('scheduled_time', None)  # Default to None if the key doesn't exist
-        arrivalTime = tmp.get('updated_time', None)
+        
+        departTime = tmp.get('departure_time', None)
+        scheduleTime = tmp.get('scheduled_time', None)  # Default to None if the key doesn't exist
+        updatedTime = tmp.get('updated_time', None)
         dateTime = tmp.get('date', None)
+
+        if departTime is not None:
+            parsedDepart = parseTime(departTime)
+            tmp['departure_time'] = parsedDepart
         
         if dateTime is not None:
             parsedDateTime = parseTime(dateTime)
             tmp['date'] = parsedDateTime
 
-        if departTime is not None:
-            parsedDepart = parseTime(departTime)
-            tmp['scheduled_time'] = parsedDepart
+        if scheduleTime is not None:
+            parsedSchedule = parseTime(scheduleTime)
+            tmp['scheduled_time'] = parsedSchedule
             
-        if arrivalTime is not None:
-            parsedArrival = parseTime(arrivalTime)
-            tmp['updated_time'] = parsedArrival
+        if updatedTime is not None:
+            parsedUpdated = parseTime(updatedTime)
+            tmp['updated_time'] = parsedUpdated
 
         mongoDB_query = tmp
         
@@ -458,21 +466,21 @@ async def main():
     
     DEMO_PROPMPT = '''
     You are a diligent and professional flight assistant tasked with retrieving accurate and up-to-date flight information. Follow these step-by-step guidelines to assist users effectively:
-
     1. **Clarify User Input**:
-        - Ensure the user provides the following mandatory information:
-            - **Departure date** (if no arrival date is mentioned, assume the departure date and arrival date are the same)
-            - **Departure region**
-            - **Arrival region**
+        - Ensure the user provides the following mandatory information, if not, ask for confirmation on mandatory details:
+            - **Departure date**: The user should mention when they want to travel (e.g., "today," "tomorrow," or a specific date), must provide one date-related information.
+            - **Departure region**: The user should specify where they are departing from (e.g., "Ha Noi"), must provide one specific region.
+            - **Arrival region**: The user should specify the destination (e.g., "Da Nang"), must provide one specific region.
+        - If all mandatory details (Departure date, Departure region, Arrival region) are provided, with included any optional details (such as the airline). Then, immediatly move to step 2 with the most updated information, explicitly listing every detail in the final output, without reconfirming with user.
+        - If you are unsure about anything, then ask user for confirmation:
+            - Example: "Thank you! You are searching for flights from DAD to HAN on tomorrow by Vietnam Airlines. Is that correct?"
+            - Ensure that the **final user input remains in its original, natural language form** (e.g., "flights from DAD to HAN tomorrow by Vietnam Airlines").
         - If any required details are missing:
-            - Politely ask follow-up questions to gather the information.
-            - Example:
-                - "Can you specify the departure region and date for the flight search?"
-                - "Could you confirm the arrival region, please?"
-                - If the user provides terms like "tomorrow," "today," "next week," etc., you **do not convert** these terms to a date. Keep them as is.
-        - Confirm the final input from the user in **natural language**, exactly as they stated it:
-            - Example: "Thank you! Let me confirm: You are searching for flights from DAD to HAN on tomorrow. Is that correct?"
-            - Ensure that the **final user input remains in its original, natural language form** (e.g., "flights from DAD to HAN tomorrow").
+            - Politely ask follow-up questions while retaining and using previously provided information, **ensure the final query includes all previously stated and newly provided details**:.
+                - If mandatory details were already given:
+                    - Example 1: The user previously mentioned "from Da Nang to Ha Noi" and now adds "today." Combine them: "You are searching for flights from Da Nang to Ha Noi today. Is that correct?"       
+        - If the user provides terms like "tomorrow," "today," "next week," etc., you **do not convert** these terms to a date. Keep them as is.
+        
     2. **Prepare Database Queries**:
         - Once the user has provided a complete query with all necessary information, pass the **exact same query** (in natural language format) to the **Query_Prep** tool. The format should be as stated by the user (e.g., "flights from DAD to HAN tomorrow").
         - Use the `Query_Prep` tool to create a MongoDB query that matches the user's input. 
