@@ -2,12 +2,14 @@ from dotenv import load_dotenv
 import os
 import sys
 
+# set your OPENAI_API_KEY in .env file
 parent_dir = os.path.dirname(os.path.dirname(__file__))
 sys.path.append(parent_dir)
 from constant import *
 
 dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
 load_dotenv(dotenv_path)
+
 import prompts
 from llama_index.llms.openai import OpenAI
 from datetime import datetime
@@ -32,10 +34,6 @@ from pydantic import BaseModel
 from enum import Enum
 import json
 from bson import ObjectId
-from elasticsearch import Elasticsearch
-from qdrant_client import QdrantClient
-from llama_index.embeddings.openai import OpenAIEmbedding
-
 
 class FlightSchema(BaseModel):
     date:Optional[str] = None
@@ -104,15 +102,71 @@ class MongoEncoder(json.JSONEncoder):
         if isinstance(obj, ObjectId):
             return str(obj)
         return super().default(obj)
+from elasticsearch import Elasticsearch
+from qdrant_client import QdrantClient
+from llama_index.embeddings.openai import OpenAIEmbedding
 
+async def query_regulation(query: str) -> str:
+        qdrant_client = QdrantClient(QDRANT_HOST)
+        es = Elasticsearch(ELASTICSEARCH_HOST)
+        embed_model = OpenAIEmbedding(model=EMBEDDING_MODEL)
+        
+        query_embedding = embed_model.get_text_embedding(query)
+        top_k = 3
+        qdrant_results = qdrant_client.search(
+            collection_name="regulations",
+            query_vector=query_embedding,
+            limit=top_k
+        )
+
+        es_results = es.search(
+            index="regulations",
+            body={
+                "query": {
+                    "match": {
+                        "text": query
+                    }
+                },
+                "size": top_k
+            }
+        )
+
+        combined_results = []
+        seen_texts = set()
+
+        for hit in qdrant_results:
+            text = hit.payload.get("text")
+            if text not in seen_texts:
+                combined_results.append({
+                    "text": text,
+                    "filename": hit.payload.get("filename"),
+                    "score": hit.score,
+                    "source": "qdrant"
+                })
+                seen_texts.add(text)
+
+        for hit in es_results["hits"]["hits"]:
+            text = hit["_source"]["text"]
+            if text not in seen_texts:
+                combined_results.append({
+                    "text": text,
+                    "filename": hit["_source"]["filename"],
+                    "score": hit["_score"],
+                    "source": "elasticsearch"
+                })
+                seen_texts.add(text)
+
+        observation = '\n\n'.join([i['text'] for i in combined_results])
+        return observation
+        #print(f'RAG data: {observation}')
 
 class MongoDBflow(Workflow):
     @step 
     async def start(self, ctx: Context, ev: StartEvent) -> ConnectDB_Event | QueryGeneration_Event :
-
+        print('Retrieve flow')
         MONGO_DB = "flight_db"  
         COLLECTION_NAME = "flight_info"  
-        CONNECTION_STRING = MONGODB_HOST
+        CONNECTION_STRING = "mongodb://localhost:27017" 
 
         LLM = OpenAI(
             model='gpt-3.5-turbo',
@@ -200,9 +254,11 @@ class MongoDBflow(Workflow):
         client = await ctx.get('mongo_client', None)
         retrieved_data = await ctx.get('retrieved_data', None)
 
+        print(f'Retrieved flow : {retrieved_data}')
+
         if client:
             client.close()
-            #print("MongoDB client closed.")
+            print("MongoDB client closed from Retrieve flow.")
         
         if not retrieved_data: # empty list
             formatted_string = 'No data retrieved, tell user there is no flights available.'
@@ -218,12 +274,12 @@ class MongoDBflow(Workflow):
 # "route": "from NYC to LAX",
 
 
-class BookFlow(MongoDBflow):
+class BookFlow(Workflow):
     @step 
-    async def start(self, ctx: Context, ev: StartEvent) -> ConnectDB_Event | QueryGeneration_Event :
+    async def start(self, ctx: Context, ev: StartEvent) -> ConnectDB_Event | QueryGenerationComplete_Event :
         MONGO_DB = "flight_db"  
         COLLECTION_NAME = "booking_info"  
-        CONNECTION_STRING = MONGO_DB 
+        CONNECTION_STRING = "mongodb://localhost:27017" 
 
         LLM = OpenAI(
             model='gpt-3.5-turbo',
@@ -237,6 +293,7 @@ class BookFlow(MongoDBflow):
         await ctx.set('LLM', LLM)
 
         try:
+            print('Book flow')
             query_str = ev.query
             #print(f'query_str: {query_str}, type: {type(query_str)}') 
 
@@ -251,6 +308,25 @@ class BookFlow(MongoDBflow):
 
         ctx.send_event(ConnectDB_Event(payload=''))
         ctx.send_event(QueryGenerationComplete_Event(payload=''))
+
+    @step
+    async def connect_mongoClient(self, ctx: Context, ev: ConnectDB_Event) -> ConnectDBComplete_Event:
+        try:
+            connection_string = await ctx.get('CONNECTION_STRING')
+            mongo_db = await ctx.get('MONGO_DB')
+            collection_name = await ctx.get('COLLECTION_NAME')
+
+            client = MongoClient(connection_string)
+            await ctx.set('mongo_client' , client)
+
+            db = client.get_database(name=mongo_db)
+            collection = db[collection_name]
+
+            await ctx.set('collection', collection)
+            return ConnectDBComplete_Event(payload='Connect to database success')
+        except Exception as e:
+            raise ValueError(f"Failed to connect to MongoDB: {str(e)}")
+
 
     @step
     async def retrieve_mongoClient(self, ctx: Context, ev: ConnectDBComplete_Event | QueryGenerationComplete_Event) -> CleanUp:
@@ -283,9 +359,14 @@ class BookFlow(MongoDBflow):
         submit_form = await ctx.get('mongoDB_query', None)
         flight_info = await ctx.get('flight_info', None)
 
+        if 'no flights available' in flight_info.lower():
+            flight_info = 'USER CANNOT BOOK FLIGHT BECAUSE FLIGHT_ID DOES NOT EXIST!'
+
+        print(f'Booking flow : {submit_form}')
+
         if client:
             client.close()
-            print("MongoDB client closed.")
+            print("MongoDB client closed from Booking flow.")
         
         if ev.payload == 'Submit booking data failed':  # empty list
             result = 'Booking submission has failed, please try again'
@@ -296,7 +377,7 @@ class BookFlow(MongoDBflow):
                 receipt_form = f"""
             User information: {submit_form},\nBooked flight information: {flight_info}
 """.strip()
-            result = f'Booking submission has succeeded. Booking Receipt: \n{receipt_form}\nEnjoy your flights.'
+            result = f'Booking submission has succeeded. Booking Receipt: \n{receipt_form}\n'
         
         observation = f"\n{result}"
         return StopEvent(result=observation)
@@ -316,12 +397,9 @@ intent_classification_prompt = PromptTemplate(prompts.PARSE_PROMPTS_INTENTION)
 class Booking_Event(Event):
     payload: str
 
-class QueryRegulation_Event(Event):
-    payload: str
-
 class GatherInformation(Workflow):
     @step
-    async def start(self, ctx: Context, ev: StartEvent) -> ParseInput_Event | StopEvent | Booking_Event | QueryRegulation_Event:
+    async def start(self, ctx: Context, ev: StartEvent) -> ParseInput_Event | StopEvent | Booking_Event:
         LLM = OpenAI(
             model='gpt-3.5-turbo',
             logprobs=None,
@@ -347,61 +425,11 @@ class GatherInformation(Workflow):
             return Booking_Event(payload=ev.query) # BOOKING TASK
         
         elif intent_classification.intent == IntentType.REGULATION:
-            
-            return QueryRegulation_Event(payload = ev.query)
-    @step
-    async def query_regulation(self, ctx: Context, ev: QueryRegulation_Event) -> StopEvent:
-        qdrant_client = QdrantClient(QDRANT_HOST)
-        es = Elasticsearch(ELASTICSEARCH_HOST)
-        embed_model = OpenAIEmbedding(model=EMBEDDING_MODEL)
-        query = ev.payload
-        query_embedding = embed_model.get_text_embedding(query)
-        top_k = 3
-        qdrant_results = qdrant_client.search(
-            collection_name="regulations",
-            query_vector=query_embedding,
-            limit=top_k
-        )
-
-        es_results = es.search(
-            index="regulations",
-            body={
-                "query": {
-                    "match": {
-                        "text": query
-                    }
-                },
-                "size": top_k
-            }
-        )
-
-        combined_results = []
-        seen_texts = set()
-
-        for hit in qdrant_results:
-            text = hit.payload.get("text")
-            if text not in seen_texts:
-                combined_results.append({
-                    "text": text,
-                    "filename": hit.payload.get("filename"),
-                    "score": hit.score,
-                    "source": "qdrant"
-                })
-                seen_texts.add(text)
-
-        for hit in es_results["hits"]["hits"]:
-            text = hit["_source"]["text"]
-            if text not in seen_texts:
-                combined_results.append({
-                    "text": text,
-                    "filename": hit["_source"]["filename"],
-                    "score": hit["_score"],
-                    "source": "elasticsearch"
-                })
-                seen_texts.add(text)
-
-        observation = '\n\n'.join([i['text'] for i in combined_results])
-        return StopEvent(result=observation)
+            regulation_prompt = PromptTemplate(prompts.PARSE_PROMPTS_REGULATION)
+            regulation_response = LLM.complete(regulation_prompt, text=ev.query)
+            return StopEvent(result=str(regulation_response)) # REGULATION TASK
+        else:
+            return StopEvent(result="I'm not sure what you're asking for. Could you please rephrase your question? You can ask me about flight schedules, airline regulations, or general flight information.")
 
     @step
     async def booking_action(self, ctx: Context, ev: Booking_Event) -> QueryGenerationComplete_Event:
@@ -533,6 +561,10 @@ async def submit_booking(booking_query: str) -> str:
     result = await w.run(query=booking_query)
     return result
 
+async def retrieve_regulation(user_query: str) -> str:
+    RAGdata = await query_regulation(query=user_query)
+    return RAGdata
+
 from llama_index.agent.openai import OpenAIAgent
 import nest_asyncio
 nest_asyncio.apply()
@@ -544,6 +576,14 @@ async def main():
         name='MongoDB_Retriever',
         description=(
             'Tool to retrieve information from the MongoDB database. This tool is used after got a valid MongoDB query.'
+        )
+    )
+
+    RAG_regulation_tool = FunctionTool.from_defaults(
+        async_fn=retrieve_regulation,
+        name='RegulationRAG_tool',
+        description=(
+            'Tool to retrive regulation information from database.'
         )
     )
 
@@ -565,7 +605,7 @@ async def main():
     )
 
     # Define the toolset (add more tools here if needed)
-    tools = [prepare_input_tool, read_mongodb_tool, booking_submit_tool]
+    tools = [prepare_input_tool, read_mongodb_tool, booking_submit_tool, RAG_regulation_tool]
 
     # Initialize the OpenAI language model
     llm = OpenAI(
