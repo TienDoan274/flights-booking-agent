@@ -98,7 +98,7 @@ PARSE_PROMPTS_REGULATION = """
 """
 
 CLARITY_1 = """
-    - Determine whether the user wants to search for flight information or book a flight ticket.
+    - Determine whether the user wants to search for flight information, book a flight ticket or asking about regulations .
     
     **For Searching Flight Information:**
     - Ensure the user provides the following mandatory details:
@@ -126,6 +126,11 @@ CLARITY_1 = """
             - Email: john.doe@email.com
             - Flight ID: VN0179
           Is that correct?"
+    
+    **For Asking Regulation Question:**
+    - **Translate to Vietnamse**: if user's language is Vietnamese, keep it as Vietnamese. If it is English, translate to Vietnamse.
+    - Capture the regulation-related question: First, capture the essence of the user's query about the regulation.
+    - Paraphrase and confirm: After receiving the user's question, paraphrase it to ensure clarity, covering all relevant details.
 
     - Ensure the final user input is formatted in natural language and remains as provided by the user.
 """.strip()
@@ -207,6 +212,7 @@ SYSTEM_PROMPT = f"""
                     "date_book": "2024-30-12"
                 }}
 
+
         - You will get output in format: 
         'Query: {{json_dictionary}}, 'Intent': query | booking | regulation | unknown
 
@@ -220,6 +226,10 @@ SYSTEM_PROMPT = f"""
             - If 'Intent' is 'booking':
                 - Use the `SubmitBooking_Tool` tool to submit booking information based on the prepared query.
                 - Validate that all booking fields are complete and accurate (username, user phone number, user email, flight_id to book).
+                - Do not generate or assume booking confirmation response.
+            - If 'Intent' is 'regulation':
+                - Ensure the user input is all translated to Vietnamese.
+                - Use the `RegulationRAG_tool` tool to retrieve regulation-related information based on the prepared query.
                 - Do not generate or assume booking confirmation response.
 
     4. **Respond to the User**:
@@ -242,7 +252,7 @@ SYSTEM_PROMPT = f"""
 
     5. **Handle Errors Gracefully**:
         - If no flights are found, respond politely:
-            - Example: "I couldn’t find any flights matching your criteria. Would you like to adjust the search?"
+            - Example: "I couldn't find any flights matching your criteria. Would you like to adjust the search?"
         - If the database retrieval fails, apologize and suggest trying again:
             - Example: "I'm having trouble retrieving the flight data right now. Can I try again for you?"
 
