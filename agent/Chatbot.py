@@ -1,6 +1,13 @@
 from dotenv import load_dotenv
-# set your OPENAI_API_KEY in .env file
-load_dotenv()
+import os
+import sys
+
+parent_dir = os.path.dirname(os.path.dirname(__file__))
+sys.path.append(parent_dir)
+from constant import *
+
+dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
+load_dotenv(dotenv_path)
 import prompts
 from llama_index.llms.openai import OpenAI
 from datetime import datetime
@@ -25,6 +32,10 @@ from pydantic import BaseModel
 from enum import Enum
 import json
 from bson import ObjectId
+from elasticsearch import Elasticsearch
+from qdrant_client import QdrantClient
+from llama_index.embeddings.openai import OpenAIEmbedding
+
 
 class FlightSchema(BaseModel):
     date:Optional[str] = None
@@ -101,7 +112,7 @@ class MongoDBflow(Workflow):
 
         MONGO_DB = "flight_db"  
         COLLECTION_NAME = "flight_info"  
-        CONNECTION_STRING = "mongodb://localhost:27017" 
+        CONNECTION_STRING = MONGODB_HOST
 
         LLM = OpenAI(
             model='gpt-3.5-turbo',
@@ -212,7 +223,7 @@ class BookFlow(MongoDBflow):
     async def start(self, ctx: Context, ev: StartEvent) -> ConnectDB_Event | QueryGeneration_Event :
         MONGO_DB = "flight_db"  
         COLLECTION_NAME = "booking_info"  
-        CONNECTION_STRING = "mongodb://localhost:27017" 
+        CONNECTION_STRING = MONGO_DB 
 
         LLM = OpenAI(
             model='gpt-3.5-turbo',
@@ -305,9 +316,12 @@ intent_classification_prompt = PromptTemplate(prompts.PARSE_PROMPTS_INTENTION)
 class Booking_Event(Event):
     payload: str
 
+class QueryRegulation_Event(Event):
+    payload: str
+
 class GatherInformation(Workflow):
     @step
-    async def start(self, ctx: Context, ev: StartEvent) -> ParseInput_Event | StopEvent | Booking_Event:
+    async def start(self, ctx: Context, ev: StartEvent) -> ParseInput_Event | StopEvent | Booking_Event | QueryRegulation_Event:
         LLM = OpenAI(
             model='gpt-3.5-turbo',
             logprobs=None,
@@ -333,11 +347,61 @@ class GatherInformation(Workflow):
             return Booking_Event(payload=ev.query) # BOOKING TASK
         
         elif intent_classification.intent == IntentType.REGULATION:
-            regulation_prompt = PromptTemplate(prompts.PARSE_PROMPTS_REGULATION)
-            regulation_response = LLM.complete(regulation_prompt, text=ev.query)
-            return StopEvent(result=str(regulation_response)) # REGULATION TASK
-        else:
-            return StopEvent(result="I'm not sure what you're asking for. Could you please rephrase your question? You can ask me about flight schedules, airline regulations, or general flight information.")
+            
+            return QueryRegulation_Event(payload = ev.query)
+    @step
+    async def query_regulation(self, ctx: Context, ev: QueryRegulation_Event) -> StopEvent:
+        qdrant_client = QdrantClient(QDRANT_HOST)
+        es = Elasticsearch(ELASTICSEARCH_HOST)
+        embed_model = OpenAIEmbedding(model=EMBEDDING_MODEL)
+        query = ev.payload
+        query_embedding = embed_model.get_text_embedding(query)
+        top_k = 3
+        qdrant_results = qdrant_client.search(
+            collection_name="regulations",
+            query_vector=query_embedding,
+            limit=top_k
+        )
+
+        es_results = es.search(
+            index="regulations",
+            body={
+                "query": {
+                    "match": {
+                        "text": query
+                    }
+                },
+                "size": top_k
+            }
+        )
+
+        combined_results = []
+        seen_texts = set()
+
+        for hit in qdrant_results:
+            text = hit.payload.get("text")
+            if text not in seen_texts:
+                combined_results.append({
+                    "text": text,
+                    "filename": hit.payload.get("filename"),
+                    "score": hit.score,
+                    "source": "qdrant"
+                })
+                seen_texts.add(text)
+
+        for hit in es_results["hits"]["hits"]:
+            text = hit["_source"]["text"]
+            if text not in seen_texts:
+                combined_results.append({
+                    "text": text,
+                    "filename": hit["_source"]["filename"],
+                    "score": hit["_score"],
+                    "source": "elasticsearch"
+                })
+                seen_texts.add(text)
+
+        observation = '\n\n'.join([i['text'] for i in combined_results])
+        return StopEvent(result=observation)
 
     @step
     async def booking_action(self, ctx: Context, ev: Booking_Event) -> QueryGenerationComplete_Event:
