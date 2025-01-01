@@ -4,3 +4,7 @@ pymongo
 dateparser
 llama-index-utils-workflow
 llama-index
+openai 
+elasticsearch 
+qdrant-client 
+tqdm

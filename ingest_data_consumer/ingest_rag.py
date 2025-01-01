@@ -92,7 +92,6 @@ def main():
     texts = read_text_files(folder_path)
     chunks = chunk_texts(texts)
     embeddings = get_embeddings([chunk["text"] for chunk in chunks])
-    
     index_to_qdrant(chunks, embeddings, "regulations")
     index_to_elasticsearch(chunks, "regulations")
     print("Ingest successfully !")

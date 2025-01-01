@@ -225,13 +225,16 @@ class MongoDBflow(Workflow):
 
     @step
     async def retrieve_mongoClient(self, ctx: Context, ev: ConnectDBComplete_Event | QueryGenerationComplete_Event ) -> CleanUp:
-        
-        #print("Received event: ", ev.payload)
-        if ( ctx.collect_events( ev, [ConnectDBComplete_Event, QueryGenerationComplete_Event]) is None):
+        if (ctx.collect_events(ev, [ConnectDBComplete_Event, QueryGenerationComplete_Event]) is None):
             return None
         try: 
             collection = await ctx.get('collection')
             mongoDB_query = await ctx.get('mongoDB_query')
+            
+            # Chuyển đổi string thành dictionary nếu nó là string
+            if isinstance(mongoDB_query, str):
+                mongoDB_query = eval(mongoDB_query)  # hoặc json.loads(mongoDB_query)
+                
             final_query = {}
             ### Apply retrieving logic with schemas
             for key, value in mongoDB_query.items():
@@ -240,21 +243,24 @@ class MongoDBflow(Workflow):
                 else:
                     final_query[key] = value
             
-            #print(f'Final Query: {final_query}')
             retrieved_data = collection.find(final_query).to_list(length=None)
-
             await ctx.set('retrieved_data', retrieved_data)
 
             return CleanUp(payload='Retrieving data success')
         except Exception as e:
             raise ValueError(f"Failed to retrieve data: {str(e)}")
 
+    def filter_item(self,item):
+        keys_to_keep = ['flight_id', 'date', 'scheduled_time', 'departure_airport', 
+                        'arrival_airport','counter','gate']
+        return {k: v for k, v in item.items() if k in keys_to_keep and v != ""}
+
     @step
     async def clean_up(self, ctx: Context, ev: CleanUp) -> StopEvent:
         client = await ctx.get('mongo_client', None)
         retrieved_data = await ctx.get('retrieved_data', None)
 
-        print(f'Retrieved flow : {retrieved_data}')
+        print(f'Retrieved flow : {retrieved_data[0]}')
 
         if client:
             client.close()
@@ -263,10 +269,12 @@ class MongoDBflow(Workflow):
         if not retrieved_data: # empty list
             formatted_string = 'No data retrieved, tell user there is no flights available.'
         else: 
-            formatted_string = "\n".join(json.dumps(item, indent=4, cls=MongoEncoder) for item in retrieved_data)
-        
+            formatted_string = "\n".join(
+                        json.dumps(self.filter_item(item), indent=4, cls=MongoEncoder) 
+                        for item in retrieved_data
+                    )        
         #print(formatted_string)
-        observation = f"Retrieved data: \n{formatted_string}"
+        observation = f"Only show users the fields which are not empty. Retrieved flights: \n{formatted_string}"
         return StopEvent(result=observation)
 
 #draw_all_possible_flows(MongoDBflow)
@@ -510,7 +518,7 @@ class GatherInformation(Workflow):
         scheduleTime = tmp.get('scheduled_time', None)  # Default to None if the key doesn't exist
         updatedTime = tmp.get('updated_time', None)
         dateTime = tmp.get('date', None)
-
+        status = tmp.get('status',None)
         if datebookTime is not None:
             parsedDatebook = parseTime(datebookTime)
             tmp['date_book'] = parsedDatebook
@@ -530,7 +538,7 @@ class GatherInformation(Workflow):
         if updatedTime is not None:
             parsedUpdated = parseTime(updatedTime)
             tmp['updated_time'] = parsedUpdated
-
+        tmp['status'] = "OPN"
         query = tmp
         
         #print(f"Final query: {query}")
@@ -583,7 +591,7 @@ async def main():
         async_fn=retrieve_regulation,
         name='RegulationRAG_tool',
         description=(
-            'Tool to retrive regulation information from database.'
+            'Tool to retrive regulations for Air Travel. No need to change user query'
         )
     )
 

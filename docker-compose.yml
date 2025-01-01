@@ -30,7 +30,7 @@ services:
     networks:
       - app-network
     volumes:
-      - D:/flights-booking-agent/persist_data/mongodb:/data/db
+      - ./mongodb:/data/db
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.5.0
@@ -45,7 +45,7 @@ services:
     networks:
       - app-network
     volumes:
-      - D:/flights-booking-agent/persist_data/elasticsearch:/usr/share/elasticsearch/data
+      - ./elasticsearch_data:/usr/share/elasticsearch/data
 
   qdrant:
     image: qdrant/qdrant:v1.4.0
@@ -55,12 +55,14 @@ services:
     networks:
       - app-network
     volumes:
-      - D:/flights-booking-agent/persist_data/qdrant:/qdrant/storage
+      - ./qdrant_data:/qdrant/storage
 
 networks:
   app-network:
     driver: bridge
 
 volumes:
-  mysql_data:
+  elasticsearch_data:
+  qdrant_data:
+  mongodb:
   
