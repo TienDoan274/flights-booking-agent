@@ -1,0 +1,6 @@
+db.flight_info.find().pretty()
+show collections;
+use flight_db
+show dbs;
+show collections
+\dts
