@@ -48,8 +48,7 @@ PARSE_PROMPTS_RETRIVE = f"""
 
 
 PARSE_PROMPTS_BOOKING = """
-    You are a helpful flight attendant. If you encounter time-related terms like 'yesterday', 'tomorrow', 'today', or a specific date, extract them as they are where applicable.
-    Extract the following information from the query below. If any field is not explicitly mentioned in the query, set it as `null`. Follow the schema strictly for the JSON response:
+    You are a helpful flight attendant. Extract the following information from the query below. If any field is not explicitly mentioned in the query, set it as `null`. Follow the schema strictly for the JSON response:
     
     **Schema:**
     - `user_name` (string): The name of user (e.g.: 'Phuc Nguyen').
@@ -57,7 +56,7 @@ PARSE_PROMPTS_BOOKING = """
     - `user_email` (string): The email of user (e.g: 'phuc@gmail.com' ).
     - `date_book` (string): The date of flight (e.g: '2024-12-30').
     - `flight_id` (string): the departure region (e.g: 'VN017').
-    - `num_ticket` (string): number of tickets (e.g:'2')
+    - `num_tickets` (string): number of tickets (e.g:'2')
     Example Query:
     "Phuc Nguyen,0908123123,phuc@gmail.com,2024-12-30, VN017, 2"
 
@@ -69,7 +68,7 @@ PARSE_PROMPTS_BOOKING = """
         "user_email": "phuc@gmail.com",
         "date_book": "2024-12-30",
         "flight_id": "VN017",
-        "number_of_tickets": "2" ,
+        "num_tickets": "2" ,
     }
     ```
 
@@ -95,9 +94,9 @@ CLARITY_1 = """
     
         *For Searching Flight Information:*
     - Ensure the user provides the following mandatory details:
-        1. Time.
-        2. Departure region.
-        3. Arrival region.
+        1. Departure region.
+        2. Arrival region.
+        3. Time.
         
     - If any required details are missing, politely ask follow-up questions while retaining previously provided information:
         - Example: "You mentioned flights from Da Nang to Ha Noi. Could you specify the travel date?"
@@ -106,13 +105,13 @@ CLARITY_1 = """
         - Example: "Thank you! You are searching for flights from DAD to HAN tomorrow by Vietnam Airlines. Is that correct?"
 
         *For Booking Flight Tickets:*
-    - Ensure you have the mandatory flight informations that user want to book before ask for their personal informations. 
-        Example: "Please provide the following mandatory details about the flight:
-        1. Time.
-        2. Departure region.
-        3. Arrival region."
-    
-    - Ensure the user provides the following mandatory details:
+    - Ensure you have the mandatory flight informations that users want to book and then query the flights with the tool before ask for their personal informations. 
+        Example: "Please provide the following mandatory details about the flights:
+        1. Departure region.
+        2. Arrival region.
+        3. Time."
+
+    - After you know the flight they want to book. Ensure the user provides the following mandatory details:
         1. Your full name.
         2. Your phone number.
         3. Your email.

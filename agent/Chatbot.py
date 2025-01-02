@@ -65,7 +65,7 @@ class BookingSchema(BaseModel):
     user_email: str
     date_book: str
     flight_id: str
-    num_tickets: int
+    num_tickets: Optional[int] = None
     
 class FlightReceipt(BaseModel):
     booking_info: BookingSchema
