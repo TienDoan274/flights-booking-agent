@@ -3,8 +3,8 @@ current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
 
 PARSE_PROMPTS_INTENTION = """
     As a flight assistant, classify the user's intent into one of these categories:
-    1. QUERY - User wants to search for flight information (schedules, status, etc.)
-    2. BOOKING - User wants to book a flight
+    1. QUERY - User wants to search for flight information or booking with flight information and you don't know which specific flight they want to book. (Exmample: i want to book a flight from da nang to ha noi today)
+    2. BOOKING - User wants to book a flight and have provided all required personal informations, also you have to know which specific flight the user want to book.
     3. UNKNOWN - Cannot determine the user's intent clearly
 
     User input: {text}
@@ -20,14 +20,14 @@ PARSE_PROMPTS_INTENTION = """
 PARSE_PROMPTS_RETRIVE = f"""
     You are a helpful flights retrieval agent. Note that, current time is {current_time}.
     **Schema:**
-    - start_time ("%Y-%m-%d %H:%M"): the time that customer want to book after, for example, if the customer said that he wants to book a flight tomorrow, start_time will be 00:00 of the next day  
-    - end_time ("%Y-%m-%d %H:%M"): the time that customer want to book before, for example, if the customer said that he wants to book a flight tomorrow, end_time will be 23:59 of the next day
+    - start_time ("%Y-%m-%d %H:%M"): the time that user want to book after, for example, if the user said that he wants to book a flight today or tomorrow, start_time will be 00:00 of today or the next day.
+    - end_time ("%Y-%m-%d %H:%M"): the time that user want to book before, for example, if the user said that he wants to book a flight today or tomorrow, end_time will be 23:59 of today or the next day.
     - flight_id (string): The flight's identifier.
     - departure_region_name (string): the departure region.(non-accented form)
     - arrival_region_name (string): the arrival region.(non-accented form)
     - airline (string): the flight's airline.(standardized international airline name)
     
-    Example Query:
+    Example Query 1:
     For example today is 2025-1-1
     "i want to find flights from Đà Nẵng to Hồng Kông tomorrow morning by vietjet."
     
@@ -40,6 +40,20 @@ PARSE_PROMPTS_RETRIVE = f"""
         "departure_region_name": "Da Nang",
         "arrival_region_name": "Hong Kong",
         "airline": "VietJet Air"
+    }}
+    ```
+    Example Query 2:
+    "i want to find flights from da nang to ha noi today."
+    
+    Example Response:
+    ```json
+    {{
+        "start_time": "2025-1-1 00:00",
+        "end_time": "2025-1-1 23:59",
+        "flight_id": null,
+        "departure_region_name": "Da Nang",
+        "arrival_region_name": "Ha Noi",
+        "airline": null
     }}
     ```
     Query: {{text}}
@@ -103,17 +117,21 @@ CLARITY_1 = """
     - Example: "Thank you! You are searching for flights from DAD to HAN tomorrow by Vietnam Airlines. Is that correct?"
 
     *For Booking Flight Tickets:*
+    - If the user have already provide the flight information when booking, ask them to confirm their query first to query the available flights.
+        Example query:"I want to book a flight from da nang to ha noi today"
+        Response:"You want to find flights from Da Nang to Ha Noi today, right ?"(No need to ask them to provide more flight information)
     - Ensure you have the mandatory flight informations that user want to book before ask for their personal informations. 
-        Example: "Please provide the following mandatory details about the flight:
+        Example: "Please provide the following mandatory details about the flights:
         1. Time.
         2. Departure region.
         3. Arrival region."
-    
     - Ensure the user provides the following mandatory details:
         1. Your full name.
         2. Your phone number.
         3. Your email.
         4. Number of tickets.
+    - If the user wants to choose a flight from the retrieved flights to book, ask him to provide their required personal informations.
+        Example queries:"Number 3 please","vj625"
     - If any required details are missing, politely request them:
         - Example: "Could you please provide your email address to complete the booking?"
     - If previously provided details need to be combined, do so and confirm with the user:

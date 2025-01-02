@@ -179,12 +179,10 @@ async def query_regulation(query: str, semantic_weight: float = 0.7, keyword_wei
             keyword_weight * result["keyword_score"]
         )
 
-    # Sort by final score and get top 3
     final_results = sorted(combined_results, 
                          key=lambda x: x["final_score"], 
                          reverse=True)[:3]
 
-    # Create observation from final results
     observation = '\n\n'.join([i['text'] for i in final_results])
     return observation
 
