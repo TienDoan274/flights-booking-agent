@@ -22,13 +22,13 @@ def create_spark_session():
             .getOrCreate())
 
 spark = create_spark_session()
-with open('../iata_code/airport.json','r',encoding = 'utf-8') as f:
+with open('iata_code/airport.json','r',encoding = 'utf-8') as f:
     airport_dict = json.load(f)
 
-with open('../iata_code/region_name.json','r',encoding = 'utf-8') as f:
+with open('iata_code/region_name.json','r',encoding = 'utf-8') as f:
     region_name_dict = json.load(f)
     
-with open('../iata_code/airline.json','r',encoding = 'utf-8') as f:
+with open('iata_code/airline.json','r',encoding = 'utf-8') as f:
     airline_dict = json.load(f)
     
 mapping_region_name = create_map([lit(x) for x in chain(*region_name_dict.items())])
