@@ -1,7 +1,7 @@
 import json
 from difflib import get_close_matches
-
-with open('iata_code/region_name.json', 'r', encoding='utf-8') as f:
+import os
+with open(os.path.join('..','iata_code', 'region_name.json'), 'r', encoding='utf-8') as f:
     data = json.load(f)
 
 vocab = list(data.values())
@@ -17,7 +17,7 @@ def match_region(region: str) -> list:
     list: A list of up to 5 most similar region names, or an empty list if no match is found.
     """
     # Find close matches with a similarity threshold
-    matches_list = get_close_matches(region, vocab, n=5, cutoff=0.6)  # Adjust cutoff if needed
+    matches_list = get_close_matches(region, vocab, n=1, cutoff=0.6)  # Adjust cutoff if needed
     if matches_list:
         return ', '.join(matches_list)
     else:

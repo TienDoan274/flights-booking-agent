@@ -128,7 +128,7 @@ CLARITY_1 = """
         1. Your full name.
         2. Your phone number.
         3. Your email.
-        4. Number of tickets.
+        4. Number of tickets. (Has to be an integer and greater than zero)
     - If the user wants to choose a flight from the retrieved flights to book, ask him to provide their required personal informations.
         Example queries:"Number 3 please","vj625",'5'
     - If any required details are missing, politely request them:
@@ -199,7 +199,7 @@ SYSTEM_PROMPT = f"""
             - Departure and arrival airports.
             - Gate and terminal details (if available).
         - **For booking task**
-            - User information: name, phone number, email.
+            - User information: name, phone number, email, number of tickets.
             - Basic booked flight information: flight id, departure time, route, airline.
         - Example response:
             - "Here is the flight information for your query: Flight DL123 will depart from JFK on 2024-12-25 at 14:00 and arrive at LAX. Terminal 4, Gate 23. Status: On-Time."
