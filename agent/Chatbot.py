@@ -65,7 +65,7 @@ class BookingSchema(BaseModel):
     user_email: str
     date_book: str
     flight_id: str
-    num_tickets: Optional[int] = None
+    num_tickets: Optional[str] = None
     
 class FlightReceipt(BaseModel):
     booking_info: BookingSchema
@@ -484,7 +484,9 @@ class GatherInformation(Workflow):
             target_schema = BookingSchema
 
         try:
+            print('helo')
             llm = await ctx.get('LLM')
+            print('hi')
             extracted_input = llm.structured_predict( target_schema, simplified_prompt, text=ev.payload)
             print(f"Extracted input: {extracted_input}")
             return QueryGeneration_Event(payload=extracted_input)
