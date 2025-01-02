@@ -65,7 +65,7 @@ class BookingSchema(BaseModel):
     user_email: str
     date_book: str
     flight_id: str
-    num_tickets: int
+    num_tickets: str
     
 class FlightReceipt(BaseModel):
     booking_info: BookingSchema
@@ -396,10 +396,6 @@ class BookFlow(Workflow):
             flight_info = await w.run(query= {'flight_id': flight_id_val,'date':mongoDB_query['date_book']})
             
             await ctx.set('flight_info', flight_info)
-
-            #print(f'Flight Info: {flight_info}')
-            #print(f'Final Query: {mongoDB_query}')
-            
             collection.insert_one(mongoDB_query)
             return CleanUp(payload='Submit booking data success')
         except Exception as e:
