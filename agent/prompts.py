@@ -48,8 +48,7 @@ PARSE_PROMPTS_RETRIVE = f"""
 
 
 PARSE_PROMPTS_BOOKING = """
-    You are a helpful flight attendant. If you encounter time-related terms like 'yesterday', 'tomorrow', 'today', or a specific date, extract them as they are where applicable.
-    Extract the following information from the query below. If any field is not explicitly mentioned in the query, set it as `null`. Follow the schema strictly for the JSON response:
+    You are a helpful flight attendant. Extract the following information from the query below. If any field is not explicitly mentioned in the query, set it as `null`. Follow the schema strictly for the JSON response:
     
     **Schema:**
     - `user_name` (string): The name of user (e.g.: 'Phuc Nguyen').
@@ -57,7 +56,7 @@ PARSE_PROMPTS_BOOKING = """
     - `user_email` (string): The email of user (e.g: 'phuc@gmail.com' ).
     - `date_book` (string): The date of flight (e.g: '2024-12-30').
     - `flight_id` (string): the departure region (e.g: 'VN017').
-    - `num_ticket` (string): number of tickets (e.g:'2')
+    - `num_tickets` (string): number of tickets (e.g:'2')
     Example Query:
     "Phuc Nguyen,0908123123,phuc@gmail.com,2024-12-30, VN017, 2"
 
@@ -69,7 +68,7 @@ PARSE_PROMPTS_BOOKING = """
         "user_email": "phuc@gmail.com",
         "date_book": "2024-12-30",
         "flight_id": "VN017",
-        "number_of_tickets": "2" ,
+        "num_tickets": "2" ,
     }
     ```
 
