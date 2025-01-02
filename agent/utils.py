@@ -17,9 +17,9 @@ def match_region(region: str) -> list:
     list: A list of up to 5 most similar region names, or an empty list if no match is found.
     """
     # Find close matches with a similarity threshold
-    matches_list = get_close_matches(region, vocab, n=5, cutoff=0.6)  # Adjust cutoff if needed
+    matches_list = get_close_matches(region, vocab, n=1, cutoff=0.6)  # Adjust cutoff if needed
     if matches_list:
-        return ', '.join(matches_list)
+        return matches_list[0]
     else:
         return None  # Return the list of matches (can be empty)
 

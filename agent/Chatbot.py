@@ -25,6 +25,7 @@ from llama_index.core.workflow import (
     draw_all_possible_flows,
     WorkflowCheckpointer
 )
+import utils
 import dateparser
 from llama_index.core.tools import FunctionTool
 from llama_index.core.agent import ReActAgent
@@ -105,7 +106,7 @@ from elasticsearch import Elasticsearch
 from qdrant_client import QdrantClient
 from llama_index.embeddings.openai import OpenAIEmbedding
 
-from sentence_transformers import CrossEncoder
+#from sentence_transformers import CrossEncoder
 
 async def query_regulation(query: str, semantic_weight: float = 0.7, keyword_weight: float = 0.3) -> str:
     qdrant_client = QdrantClient(QDRANT_HOST)
@@ -537,6 +538,26 @@ class GatherInformation(Workflow):
         updatedTime = tmp.get('updated_time', None)
         dateTime = tmp.get('date', None)
         status = tmp.get('status',None)
+
+        if tmp.get('departure_region_name'):
+            region_name = tmp['departure_region_name']
+            fixed_region = utils.match_region(region_name)
+            if fixed_region:
+                tmp['departure_region_name'] = fixed_region
+            else:
+                # Use a regex to match any region or similar patterns
+                tmp['departure_region_name'] = None
+                
+        if tmp.get('arrival_region_name'):
+            region_name = tmp['arrival_region_name']
+            fixed_region = utils.match_region(region_name)
+            if fixed_region:
+                tmp['arrival_region_name'] = fixed_region
+            else:
+                # Use a regex to match any region or similar patterns
+                tmp['arrival_region_name'] = None
+
+
         if datebookTime is not None:
             parsedDatebook = parseTime(datebookTime)
             tmp['date_book'] = parsedDatebook
