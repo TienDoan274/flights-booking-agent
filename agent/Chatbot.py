@@ -65,7 +65,7 @@ class BookingSchema(BaseModel):
     user_email: str
     date_book: str
     flight_id: str
-    num_tickets: Optional[str] = None
+    num_tickets: str
     
 class FlightReceipt(BaseModel):
     booking_info: BookingSchema
@@ -179,12 +179,10 @@ async def query_regulation(query: str, semantic_weight: float = 0.7, keyword_wei
             keyword_weight * result["keyword_score"]
         )
 
-    # Sort by final score and get top 3
     final_results = sorted(combined_results, 
                          key=lambda x: x["final_score"], 
                          reverse=True)[:3]
 
-    # Create observation from final results
     observation = '\n\n'.join([i['text'] for i in final_results])
     return observation
 
@@ -396,10 +394,6 @@ class BookFlow(Workflow):
             flight_info = await w.run(query= {'flight_id': flight_id_val,'date':mongoDB_query['date_book']})
             
             await ctx.set('flight_info', flight_info)
-
-            #print(f'Flight Info: {flight_info}')
-            #print(f'Final Query: {mongoDB_query}')
-            
             collection.insert_one(mongoDB_query)
             return CleanUp(payload='Submit booking data success')
         except Exception as e:
