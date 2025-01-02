@@ -36,11 +36,9 @@ import json
 from bson import ObjectId
 
 class FlightSchema(BaseModel):
-    date:Optional[str] = None
-    scheduled_time:Optional[str] = None
+    start_time:Optional[str] = None
+    end_time:Optional[str] = None
     flight_id:Optional[str] = None
-    counter:Optional[str] = None
-    gate:Optional[str] = None
     departure_region_name:Optional[str] = None
     arrival_region_name:Optional[str] = None
     departure_airport:Optional[str] = None
@@ -67,6 +65,7 @@ class BookingSchema(BaseModel):
     user_email: str
     date_book: str
     flight_id: str
+    num_tickets: int
     
 class FlightReceipt(BaseModel):
     booking_info: BookingSchema
@@ -106,59 +105,88 @@ from elasticsearch import Elasticsearch
 from qdrant_client import QdrantClient
 from llama_index.embeddings.openai import OpenAIEmbedding
 
-async def query_regulation(query: str) -> str:
-        qdrant_client = QdrantClient(QDRANT_HOST)
-        es = Elasticsearch(ELASTICSEARCH_HOST)
-        embed_model = OpenAIEmbedding(model=EMBEDDING_MODEL)
+from sentence_transformers import CrossEncoder
+
+async def query_regulation(query: str, semantic_weight: float = 0.7, keyword_weight: float = 0.3) -> str:
+    qdrant_client = QdrantClient(QDRANT_HOST)
+    es = Elasticsearch(ELASTICSEARCH_HOST)
+    embed_model = OpenAIEmbedding(model=EMBEDDING_MODEL)
+    
+    query_embedding = embed_model.get_text_embedding(query)
+    top_k = 10  
+    
+    qdrant_results = qdrant_client.search(
+        collection_name="regulations",
+        query_vector=query_embedding,
+        limit=top_k
+    )
+
+    # Get Elasticsearch results
+    es_results = es.search(
+        index="regulations",
+        body={
+            "query": {
+                "match": {
+                    "text": query
+                }
+            },
+            "size": top_k
+        }
+    )
+
+    max_qdrant_score = max([hit.score for hit in qdrant_results], default=1)
+    max_es_score = max([hit["_score"] for hit in es_results["hits"]["hits"]], default=1)
+
+    combined_results = []
+    seen_texts = set()
+
+    # Process Qdrant results with normalized scores
+    for hit in qdrant_results:
+        text = hit.payload.get("text")
+        if text not in seen_texts:
+            normalized_score = hit.score / max_qdrant_score
+            combined_results.append({
+                "text": text,
+                "filename": hit.payload.get("filename"),
+                "semantic_score": normalized_score,
+                "keyword_score": 0,  # Will be updated if found in ES results
+                "source": "qdrant"
+            })
+            seen_texts.add(text)
+
+    # Process and merge Elasticsearch results
+    for hit in es_results["hits"]["hits"]:
+        text = hit["_source"]["text"]
+        normalized_score = hit["_score"] / max_es_score
         
-        query_embedding = embed_model.get_text_embedding(query)
-        top_k = 3
-        qdrant_results = qdrant_client.search(
-            collection_name="regulations",
-            query_vector=query_embedding,
-            limit=top_k
+        # Check if text already exists from Qdrant results
+        existing_result = next((r for r in combined_results if r["text"] == text), None)
+        if existing_result:
+            existing_result["keyword_score"] = normalized_score
+        elif text not in seen_texts:
+            combined_results.append({
+                "text": text,
+                "filename": hit["_source"]["filename"],
+                "semantic_score": 0,  # Not found in Qdrant results
+                "keyword_score": normalized_score,
+                "source": "elasticsearch"
+            })
+            seen_texts.add(text)
+
+    for result in combined_results:
+        result["final_score"] = (
+            semantic_weight * result["semantic_score"] +
+            keyword_weight * result["keyword_score"]
         )
 
-        es_results = es.search(
-            index="regulations",
-            body={
-                "query": {
-                    "match": {
-                        "text": query
-                    }
-                },
-                "size": top_k
-            }
-        )
+    # Sort by final score and get top 3
+    final_results = sorted(combined_results, 
+                         key=lambda x: x["final_score"], 
+                         reverse=True)[:3]
 
-        combined_results = []
-        seen_texts = set()
-
-        for hit in qdrant_results:
-            text = hit.payload.get("text")
-            if text not in seen_texts:
-                combined_results.append({
-                    "text": text,
-                    "filename": hit.payload.get("filename"),
-                    "score": hit.score,
-                    "source": "qdrant"
-                })
-                seen_texts.add(text)
-
-        for hit in es_results["hits"]["hits"]:
-            text = hit["_source"]["text"]
-            if text not in seen_texts:
-                combined_results.append({
-                    "text": text,
-                    "filename": hit["_source"]["filename"],
-                    "score": hit["_score"],
-                    "source": "elasticsearch"
-                })
-                seen_texts.add(text)
-
-        observation = '\n\n'.join([i['text'] for i in combined_results])
-        return observation
-        #print(f'RAG data: {observation}')
+    # Create observation from final results
+    observation = '\n\n'.join([i['text'] for i in final_results])
+    return observation
 
 class MongoDBflow(Workflow):
     @step 
@@ -166,7 +194,7 @@ class MongoDBflow(Workflow):
         print('Retrieve flow')
         MONGO_DB = "flight_db"  
         COLLECTION_NAME = "flight_info"  
-        CONNECTION_STRING = "mongodb://localhost:27017" 
+        CONNECTION_STRING = MONGODB_HOST 
 
         LLM = OpenAI(
             model='gpt-3.5-turbo',
@@ -222,28 +250,51 @@ class MongoDBflow(Workflow):
             return ConnectDBComplete_Event(payload='Connect to database success')
         except Exception as e:
             raise ValueError(f"Failed to connect to MongoDB: {str(e)}")
-
     @step
-    async def retrieve_mongoClient(self, ctx: Context, ev: ConnectDBComplete_Event | QueryGenerationComplete_Event ) -> CleanUp:
+    async def retrieve_mongoClient(self, ctx: Context, ev: ConnectDBComplete_Event | QueryGenerationComplete_Event) -> CleanUp:
         if (ctx.collect_events(ev, [ConnectDBComplete_Event, QueryGenerationComplete_Event]) is None):
             return None
-        try: 
+        try:
             collection = await ctx.get('collection')
             mongoDB_query = await ctx.get('mongoDB_query')
-            
-            # Chuyển đổi string thành dictionary nếu nó là string
+
+            # Convert string to dictionary if it's a string
             if isinstance(mongoDB_query, str):
-                mongoDB_query = eval(mongoDB_query)  # hoặc json.loads(mongoDB_query)
-                
+                mongoDB_query = eval(mongoDB_query)  # or json.loads(mongoDB_query)
+
             final_query = {}
-            ### Apply retrieving logic with schemas
-            for key, value in mongoDB_query.items():
-                if key == 'departure_time' or key == 'arrival_time':
-                    final_query[key] = { "$regex": f"^{value}"}
-                else:
-                    final_query[key] = value
             
-            retrieved_data = collection.find(final_query).to_list(length=None)
+            start_time = mongoDB_query.get('start_time')
+            end_time = mongoDB_query.get('end_time')
+            
+            if start_time and end_time:
+                final_query["departure_time"] = {"$gte": start_time, "$lte": end_time}
+            elif start_time:
+                final_query["departure_time"] = {"$gte": start_time}
+            elif end_time:
+                final_query["departure_time"] = {"$lte": end_time}
+                    
+            # Handle other fields
+            if mongoDB_query.get('departure_region_name'):
+                final_query['departure_region_name'] = mongoDB_query['departure_region_name']
+                    
+            if mongoDB_query.get('arrival_region_name'):
+                final_query['arrival_region_name'] = mongoDB_query['arrival_region_name']
+                    
+            if mongoDB_query.get('airline'):
+                final_query['airline'] = mongoDB_query['airline']
+                    
+            if mongoDB_query.get('flight_id'):
+                final_query['flight_id'] = mongoDB_query['flight_id']
+
+            if mongoDB_query.get('status'):
+                final_query['status'] = mongoDB_query['status']
+            if mongoDB_query.get('date'):
+                final_query['date'] = mongoDB_query['date']
+            print(final_query)
+            # Execute query and retrieve data - with proper await
+            cursor = collection.find(final_query)
+            retrieved_data = cursor.to_list(length=None)
             await ctx.set('retrieved_data', retrieved_data)
 
             return CleanUp(payload='Retrieving data success')
@@ -260,8 +311,6 @@ class MongoDBflow(Workflow):
         client = await ctx.get('mongo_client', None)
         retrieved_data = await ctx.get('retrieved_data', None)
 
-        print(f'Retrieved flow : {retrieved_data[0]}')
-
         if client:
             client.close()
             print("MongoDB client closed from Retrieve flow.")
@@ -277,18 +326,13 @@ class MongoDBflow(Workflow):
         observation = f"Only show users the fields which are not empty. Retrieved flights: \n{formatted_string}"
         return StopEvent(result=observation)
 
-#draw_all_possible_flows(MongoDBflow)
-# - `route` (string): The flight's route, in the format **"from <destination1> to <destination2>"**. Both `destination1` and `destination2` must be provided. For example, "from NYC to LAX".
-# "route": "from NYC to LAX",
-
 
 class BookFlow(Workflow):
     @step 
     async def start(self, ctx: Context, ev: StartEvent) -> ConnectDB_Event | QueryGenerationComplete_Event :
         MONGO_DB = "flight_db"  
         COLLECTION_NAME = "booking_info"  
-        CONNECTION_STRING = "mongodb://localhost:27017" 
-
+        CONNECTION_STRING = MONGODB_HOST
         LLM = OpenAI(
             model='gpt-3.5-turbo',
             logprobs=None,  
@@ -349,7 +393,8 @@ class BookFlow(Workflow):
             
             flight_id_val = mongoDB_query['flight_id']
             w = MongoDBflow(timeout=30, verbose=False)
-            flight_info = await w.run(query= {'flight_id': flight_id_val})
+            flight_info = await w.run(query= {'flight_id': flight_id_val,'date':mongoDB_query['date_book']})
+            
             await ctx.set('flight_info', flight_info)
 
             #print(f'Flight Info: {flight_info}')
@@ -393,7 +438,6 @@ class BookFlow(Workflow):
 class IntentType(str, Enum):
     QUERY = "query"
     BOOKING = "booking"
-    REGULATION = "regulation"
     UNKNOWN = "unknown"
 
 class IntentClassification(BaseModel):
@@ -402,12 +446,9 @@ class IntentClassification(BaseModel):
 
 intent_classification_prompt = PromptTemplate(prompts.PARSE_PROMPTS_INTENTION)
 
-class Booking_Event(Event):
-    payload: str
-
 class GatherInformation(Workflow):
     @step
-    async def start(self, ctx: Context, ev: StartEvent) -> ParseInput_Event | StopEvent | Booking_Event:
+    async def start(self, ctx: Context, ev: StartEvent) -> ParseInput_Event | StopEvent :
         LLM = OpenAI(
             model='gpt-3.5-turbo',
             logprobs=None,
@@ -428,31 +469,8 @@ class GatherInformation(Workflow):
         
         if intent_classification.intent == IntentType.QUERY or intent_classification.intent == IntentType.BOOKING:
             return ParseInput_Event(payload=ev.query) #  RETRIEVE TASK
-        
-        elif intent_classification.intent == IntentType.BOOKING:
-            return Booking_Event(payload=ev.query) # BOOKING TASK
-        
-        elif intent_classification.intent == IntentType.REGULATION:
-            regulation_prompt = PromptTemplate(prompts.PARSE_PROMPTS_REGULATION)
-            regulation_response = LLM.complete(regulation_prompt, text=ev.query)
-            return StopEvent(result=str(regulation_response)) # REGULATION TASK
         else:
             return StopEvent(result="I'm not sure what you're asking for. Could you please rephrase your question? You can ask me about flight schedules, airline regulations, or general flight information.")
-
-    @step
-    async def booking_action(self, ctx: Context, ev: Booking_Event) -> QueryGenerationComplete_Event:
-        llm = await ctx.get('LLM')
-        user_query = ev.payload
-
-        simplified_prompt = PromptTemplate(prompts.PARSE_PROMPTS_BOOKING)
-
-        extracted_input = llm.structured_predict( BookingSchema, simplified_prompt, text= user_query)
-        #print(f'Book extracted: {extracted_input}')
-
-        if not isinstance(extracted_input, BaseModel):
-            raise ValueError("Parsed input is not a valid Pydantic object.")
-        
-        return StopEvent(result='Please provide more information')
 
     @step
     async def parse_userQuery(self, ctx: Context, ev: ParseInput_Event) -> QueryGeneration_Event:
@@ -468,7 +486,7 @@ class GatherInformation(Workflow):
         try:
             llm = await ctx.get('LLM')
             extracted_input = llm.structured_predict( target_schema, simplified_prompt, text=ev.payload)
-            #print(f"Extracted input: {extracted_input}")
+            print(f"Extracted input: {extracted_input}")
             return QueryGeneration_Event(payload=extracted_input)
         
         except Exception as e:
@@ -591,7 +609,7 @@ async def main():
         async_fn=retrieve_regulation,
         name='RegulationRAG_tool',
         description=(
-            'Tool to retrive regulations for Air Travel. No need to change user query'
+            'Tool to retrive general regulations for Air Travel. No need to change user query'
         )
     )
 
@@ -612,7 +630,6 @@ async def main():
         )
     )
 
-    # Define the toolset (add more tools here if needed)
     tools = [prepare_input_tool, read_mongodb_tool, booking_submit_tool, RAG_regulation_tool]
 
     # Initialize the OpenAI language model

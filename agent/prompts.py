@@ -1,55 +1,50 @@
+from datetime import datetime
+current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+
 PARSE_PROMPTS_INTENTION = """
     As a flight assistant, classify the user's intent into one of these categories:
     1. QUERY - User wants to search for flight information (schedules, status, etc.)
     2. BOOKING - User wants to book a flight
-    3. REGULATION - User is asking about airline regulations or travel requirements
-    4. UNKNOWN - Cannot determine the user's intent clearly
+    3. UNKNOWN - Cannot determine the user's intent clearly
 
     User input: {text}
 
     Respond with the intent classification in the following JSON format:
     {
-        "intent": "QUERY|BOOKING|REGULATION|UNKNOWN",
+        "intent": "QUERY|BOOKING|UNKNOWN",
         "confidence": <float between 0 and 1>
     }
 """
 
 
-PARSE_PROMPTS_RETRIVE = """
-    You are a helpful flight attendant. If you encounter time-related terms like 'yesterday', 'tomorrow', 'today', or a specific date, extract them as they are and map them to `departure_time` or `arrival_time` where applicable.
-    Extract the following information from the query below. If any field is not explicitly mentioned in the query, set it as `null`. Follow the schema strictly for the JSON response:
-    
+PARSE_PROMPTS_RETRIVE = f"""
+    You are a helpful flights retrieval agent. Note that, current time is {current_time}.
     **Schema:**
-    - `date` (string): The date associated with the flight, including terms like 'today', 'tomorrow', or specific dates (e.g., '2024-12-25').
-    - `scheduled_time` (string): The scheduled time of the flight, if mentioned (e.g., '14:30').
-    - `flight_id` (string): The flight's identifier.
-    - `status` (string): The flight's status. (always query flights have status open)
-    - `departure_region_name` (string): the departure region.(non-accented form)
-    - `arrival_region_name` (string): the arrival region.(non-accented form)
-    - `airline` (string): the flight's airline.(standardized international airline name)
+    - start_time ("%Y-%m-%d %H:%M"): the time that customer want to book after, for example, if the customer said that he wants to book a flight tomorrow, start_time will be 00:00 of the next day  
+    - end_time ("%Y-%m-%d %H:%M"): the time that customer want to book before, for example, if the customer said that he wants to book a flight tomorrow, end_time will be 23:59 of the next day
+    - flight_id (string): The flight's identifier.
+    - departure_region_name (string): the departure region.(non-accented form)
+    - arrival_region_name (string): the arrival region.(non-accented form)
+    - airline (string): the flight's airline.(standardized international airline name)
+    
     Example Query:
-    "i want to find flights from Đà Nẵng to Hồng Kông tomorrow by vietjet."
+    For example today is 2025-1-1
+    "i want to find flights from Đà Nẵng to Hồng Kông tomorrow morning by vietjet."
     
     Example Response:
     ```json
-    {
-        "date": "tomorrow",
-        "scheduled_time": null,
+    {{
+        "start_time": "2025-1-2 00:00",
+        "end_time": "2025-1-2 11:59",
         "flight_id": null,
-        "counter": null,
-        "gate": null,
         "departure_region_name": "Da Nang",
         "arrival_region_name": "Hong Kong",
         "airline": "VietJet Air"
-    }
+    }}
     ```
-
-    Now, process the following query and respond as a JSON object:
-
-    Query: {text}
-
-    Respond:
-"""
+    Query: {{text}}
+    Response:
+    """
 
 
 PARSE_PROMPTS_BOOKING = """
@@ -60,12 +55,11 @@ PARSE_PROMPTS_BOOKING = """
     - `user_name` (string): The name of user (e.g.: 'Phuc Nguyen').
     - `user_phone` (string): The phone number of user (e.g: '0908123123').
     - `user_email` (string): The email of user (e.g: 'phuc@gmail.com' ).
-    - `date_book` (string): The date of booking (e.g: '2024-12-30'), default value: 'today'.
+    - `date_book` (string): The date of flight (e.g: '2024-12-30').
     - `flight_id` (string): the departure region (e.g: 'VN017').
-    - `departure_time` (string): the arrival region (e.g: '2025-1-3 15:30'), Optional.
-
+    - `num_ticket` (string): number of tickets (e.g:'2')
     Example Query:
-    "name Phuc Nguyen, phonenumber 0908123123, useremail phuc@gmail.com, flight_id VN017 "
+    "Phuc Nguyen,0908123123,phuc@gmail.com,2024-12-30, VN017, 2"
 
     Example Response:
     ```json
@@ -73,9 +67,9 @@ PARSE_PROMPTS_BOOKING = """
         "user_name": "Phuc Nguyen",
         "user_phone": "0908123123",
         "user_email": "phuc@gmail.com",
-        "date_book": "today",
-        "flight_id": VN017,
-        "departure_time": null,
+        "date_book": "2024-12-30",
+        "flight_id": "VN017",
+        "number_of_tickets": "2" ,
     }
     ```
 
@@ -99,18 +93,25 @@ PARSE_PROMPTS_REGULATION = """
 CLARITY_1 = """
     - Determine whether the user wants to search for flight information, book a flight ticket or asking about regulations .
     
-    **For Searching Flight Information:**
+        *For Searching Flight Information:*
     - Ensure the user provides the following mandatory details:
-        1. **Departure date**: When the user wants to travel (e.g., "today," "tomorrow," or a specific date).
-        2. **Departure region**: Where the user is departing from (e.g., "Ha Noi").
-        3. **Arrival region**: The destination (e.g., "Da Nang").
+        1. Time.
+        2. Departure region.
+        3. Arrival region.
+        
     - If any required details are missing, politely ask follow-up questions while retaining previously provided information:
         - Example: "You mentioned flights from Da Nang to Ha Noi. Could you specify the travel date?"
     - If optional details (e.g., preferred airline) are included, retain them in the final query.
     - Confirm with the user before proceeding if there is any ambiguity:
         - Example: "Thank you! You are searching for flights from DAD to HAN tomorrow by Vietnam Airlines. Is that correct?"
 
-    **For Booking Flight Tickets:**
+        *For Booking Flight Tickets:*
+    - Ensure you have the mandatory flight informations that user want to book before ask for their personal informations. 
+        Example: "Please provide the following mandatory details about the flight:
+        1. Time.
+        2. Departure region.
+        3. Arrival region."
+    
     - Ensure the user provides the following mandatory details:
         1. Your full name.
         2. Your phone number.
@@ -126,12 +127,8 @@ CLARITY_1 = """
             - Number of tickets: 2
             Is that correct?"
     
-    **For Asking Regulation Question:**
-    - **Translate to Vietnamse**: if user's language is Vietnamese, keep it as Vietnamese. If it is English, translate to Vietnamse.
-    - Capture the regulation-related question: First, capture the essence of the user's query about the regulation.
-    - Paraphrase and confirm: After receiving the user's question, paraphrase it to ensure clarity, covering all relevant details.
-
-    - Ensure the final user input is formatted in natural language and remains as provided by the user.
+    **For Asking general air travel regulations:**
+    - Just send their exact query to the tool named RegulationRAG_tool. 
 """.strip()
 
 CLARITY_2 = """
@@ -186,7 +183,7 @@ CLARITY_2 = """
 
 SYSTEM_PROMPT = f"""
     You are a diligent and professional flight assistant tasked with retrieving accurate, up-to-date flight information ,helping user to book flight ticket and answering about regulations. Follow these step-by-step guidelines to assist users effectively:
-    1. **Clarify User Input**:
+    1. **Clarify User Input**: 
         {CLARITY_1}
 
     2. **Prepare Database Queries**:
@@ -261,11 +258,4 @@ SYSTEM_PROMPT = f"""
         - Always prioritize the user's needs and provide additional help where possible.
 """
 
-SYSTEM_PROMPT2 = """You are a chatbot designed to assist with flight-related tasks. Your three main responsibilities are:
-
-1. Flight Queries: Help users find flight information based on criteria like departure time, origin, destination, airline, .... Retrieve data from the database and provide accurate answers.
-
-2. Flight Booking: Assist users in booking tickets by collecting details like name, departure, destination, time, and ticket quantity. Confirm the information before finalizing the booking.
-
-3. Flight Regulations: Provide details about air travel regulations based on context retrieved from the tool.
-"""
+SYSTEM_PROMPT2 = """You are a chatbot designed to assist with flight-related tasks."""
