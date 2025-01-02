@@ -181,9 +181,13 @@ class MongoDBflow(Workflow):
 
         try:
             query_str = ev.query
+
             if isinstance(query_str, str):
                 query_str = query_str.replace("'", '"')
-            query_str = json.dumps(query_str)
+            else:
+                query_str = json.dumps(query_str)
+            
+            #query_str = json.dumps(query_str)
             db_query = json.loads(query_str)
             
         except json.JSONDecodeError as e:
@@ -236,6 +240,7 @@ class MongoDBflow(Workflow):
                 mongoDB_query = eval(mongoDB_query)  # hoặc json.loads(mongoDB_query)
                 
             final_query = {}
+
             ### Apply retrieving logic with schemas
             for key, value in mongoDB_query.items():
                 if key == 'departure_time' or key == 'arrival_time':
@@ -304,9 +309,9 @@ class BookFlow(Workflow):
             print('Book flow')
             query_str = ev.query
             #print(f'query_str: {query_str}, type: {type(query_str)}') 
-
+            
             query_str = query_str.replace("'", '"')    
-            db_query = json.loads(query_str)
+            db_query = json.dumps(query_str)
             
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid query format: {query_str}") from e
@@ -346,8 +351,16 @@ class BookFlow(Workflow):
             
             if collection is None or mongoDB_query is None :
                 return CleanUp(payload='Submit booking data failed: Missing required context data')
+            print(mongoDB_query, type(mongoDB_query))
+
+            if isinstance(mongoDB_query, str):
+                mongoDB_query = json.loads(mongoDB_query)
             
-            flight_id_val = mongoDB_query['flight_id']
+            data_dict = json.loads(mongoDB_query)
+
+            print(data_dict, type(data_dict))
+
+            flight_id_val = data_dict['flight_id']
             w = MongoDBflow(timeout=30, verbose=False)
             flight_info = await w.run(query= {'flight_id': flight_id_val})
             await ctx.set('flight_info', flight_info)
@@ -355,7 +368,7 @@ class BookFlow(Workflow):
             #print(f'Flight Info: {flight_info}')
             #print(f'Final Query: {mongoDB_query}')
             
-            collection.insert_one(mongoDB_query)
+            collection.insert_one(data_dict)
             return CleanUp(payload='Submit booking data success')
         except Exception as e:
             print(f"Error during booking submission: {str(e)}")
