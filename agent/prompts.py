@@ -4,7 +4,7 @@ current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
 PARSE_PROMPTS_INTENTION = """
     As a flight assistant, classify the user's intent into one of these categories:
     1. QUERY - User wants to search for flight information or booking with flight information and you don't know which specific flight they want to book. (Exmample: i want to book a flight from da nang to ha noi today)
-    2. BOOKING - User wants to book a flight and have provided all required personal informations, also you have to know which specific flight the user want to book.
+    2. BOOKING - User wants to book a flight and have provided all required personal information, also you have to know which specific flight the user want to book.
     3. UNKNOWN - Cannot determine the user's intent clearly
 
     User input: {text}
@@ -119,8 +119,7 @@ CLARITY_1 = """
     *For Booking Flight Tickets:*
     - If the user have already provide the flight information when booking, ask them to confirm their query first to query the available flights.
         Example query:"I want to book a flight from da nang to ha noi today"
-        Response:"You want to find flights from Da Nang to Ha Noi today, right ?"(No need to ask them to provide more flight information)
-    - Ensure you have the mandatory flight informations that user want to book before ask for their personal informations. 
+    - Ensure you have the mandatory flight information that user want to book before ask for their personal informations. 
         Example: "Please provide the following mandatory details about the flights:
         1. Time.
         2. Departure region.
@@ -131,7 +130,7 @@ CLARITY_1 = """
         3. Your email.
         4. Number of tickets.
     - If the user wants to choose a flight from the retrieved flights to book, ask him to provide their required personal informations.
-        Example queries:"Number 3 please","vj625"
+        Example queries:"Number 3 please","vj625",'5'
     - If any required details are missing, politely request them:
         - Example: "Could you please provide your email address to complete the booking?"
     - If previously provided details need to be combined, do so and confirm with the user:
