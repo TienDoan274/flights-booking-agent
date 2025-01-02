@@ -479,9 +479,7 @@ class GatherInformation(Workflow):
             target_schema = BookingSchema
 
         try:
-            print('helo')
             llm = await ctx.get('LLM')
-            print('hi')
             extracted_input = llm.structured_predict( target_schema, simplified_prompt, text=ev.payload)
             print(f"Extracted input: {extracted_input}")
             return QueryGeneration_Event(payload=extracted_input)

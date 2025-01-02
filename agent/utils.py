@@ -1,7 +1,7 @@
 import json
 from difflib import get_close_matches
-
-with open('iata_code/region_name.json', 'r', encoding='utf-8') as f:
+import os
+with open(os.path.join('..', 'iata_code', 'region_name.json'), 'r', encoding='utf-8') as f:
     data = json.load(f)
 
 vocab = list(data.values())
