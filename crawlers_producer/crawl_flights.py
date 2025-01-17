@@ -50,7 +50,7 @@ class WebCrawler:
             today = datetime.now()
             all_data = {}
             print(today)
-            for i in range(5):  
+            for i in range(7):  
                 current_date = today + timedelta(days=i)
                 date_str = current_date.strftime('%Y-%m-%d')
                 print(f"\nProcessing date: {date_str}")

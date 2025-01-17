@@ -116,7 +116,7 @@ async def query_regulation(query: str, semantic_weight: float = 0.7, keyword_wei
     embed_model = OpenAIEmbedding(model=EMBEDDING_MODEL)
     
     query_embedding = embed_model.get_text_embedding(query)
-    top_k = 10  
+    top_k = 6  
     
     qdrant_results = qdrant_client.search(
         collection_name="regulations",
@@ -124,7 +124,6 @@ async def query_regulation(query: str, semantic_weight: float = 0.7, keyword_wei
         limit=top_k
     )
 
-    # Get Elasticsearch results
     es_results = es.search(
         index="regulations",
         body={
@@ -256,7 +255,6 @@ class MongoDBflow(Workflow):
             collection = await ctx.get('collection')
             mongoDB_query = await ctx.get('mongoDB_query')
 
-            # Convert string to dictionary if it's a string
             if isinstance(mongoDB_query, str):
                 mongoDB_query = eval(mongoDB_query)  # or json.loads(mongoDB_query)
 
@@ -316,7 +314,7 @@ class MongoDBflow(Workflow):
         else: 
             formatted_string = "\n".join(
                         json.dumps(self.filter_item(item), indent=4, cls=MongoEncoder) 
-                        for item in retrieved_data
+                        for item in retrieved_data[:8]
                     )        
         #print(formatted_string)
         observation = f"Only show users the fields which are not empty. Retrieved flights: \n{formatted_string}"
@@ -390,7 +388,8 @@ class BookFlow(Workflow):
             flight_id_val = mongoDB_query['flight_id']
             w = MongoDBflow(timeout=30, verbose=False)
             flight_info = await w.run(query= {'flight_id': flight_id_val,'date':mongoDB_query['date_book']})
-            if 'no flights available' in flight_info.lower():
+            print('flight_info:',flight_info)
+            if 'no flights available' in flight_info.lower() or flight_info==None:
                 flight_info = 'USER CANNOT BOOK FLIGHT BECAUSE FLIGHT_ID DOES NOT EXIST!'
                 return CleanUp(payload='There is no available flights with that flight id')
             else:
@@ -412,8 +411,8 @@ class BookFlow(Workflow):
         if client:
             client.close()
             print("MongoDB client closed from Booking flow.")
-        
-        if ev.payload == 'Submit booking data failed':  
+        print('ev.payload:',ev.payload)
+        if ev.payload == 'There is no available flights with that flight id':  
             result = 'Booking submission has failed, please try again'
         else:
             if not submit_form:
@@ -469,7 +468,7 @@ class GatherInformation(Workflow):
         
         intent = await ctx.get('Intent')
         if intent == IntentType.QUERY:
-            simplified_prompt = PromptTemplate(prompts.PARSE_PROMPTS_RETRIVE)
+            simplified_prompt = PromptTemplate(prompts.PARSE_PROMPTS_RETRIEVE)
             target_schema = FlightSchema
         if intent == IntentType.BOOKING:
             simplified_prompt = PromptTemplate(prompts.PARSE_PROMPTS_BOOKING)

@@ -17,8 +17,8 @@ PARSE_PROMPTS_INTENTION = """
 """
 
 
-PARSE_PROMPTS_RETRIVE = f"""
-    You are a helpful flights retrieval agent. Note that, current time is {current_time}.
+PARSE_PROMPTS_RETRIEVE = f"""
+    You are a helpful flights retrieval agent. Note that, current time is {current_time},on {datetime.now().strftime("%A")}.
     **Schema:**
     - start_time ("%Y-%m-%d %H:%M"): the time that user want to book after, for example, if the user said that he wants to book a flight today or tomorrow, start_time will be 00:00 of today or the next day.
     - end_time ("%Y-%m-%d %H:%M"): the time that user want to book before, for example, if the user said that he wants to book a flight today or tomorrow, end_time will be 23:59 of today or the next day.
@@ -56,9 +56,26 @@ PARSE_PROMPTS_RETRIVE = f"""
         "airline": null
     }}
     ```
+    
+    Example Query 3:
+    For example, today is Friday, 2025-1-3. Next week will start from 2025-1-6 (next Monday) to 2025-1-12 (Sunday), because there are 7 days in a week and the order is Monday, Tuesday, Wednesday, Thursday, Friday, Saturday and Sunday.    
+    "i want to find flights from Đà Nẵng to Hồng Kông next week."
+    
+    Example Response:
+    ```json
+    {{
+        "start_time": "2025-1-6 00:00",
+        "end_time": "2025-1-12 23:59",
+        "flight_id": null,
+        "departure_region_name": "Da Nang",
+        "arrival_region_name": "Hong Kong",
+        "airline": null
+    }}
+    
     Query: {{text}}
     Response:
     """
+    
 
 
 PARSE_PROMPTS_BOOKING = """
@@ -105,7 +122,7 @@ PARSE_PROMPTS_REGULATION = """
 
 CLARITY_1 = """
     - Determine whether the user wants to search for flight information, book a flight ticket or asking about regulations .
-    
+    Note that, current time is {current_time},on {datetime.now().strftime("%A")
     *For Searching Flight Information:*
     - Ensure the user provides the following mandatory details:
         1. Time.(Could be tomorrow, today, from 2am to 9pm,...)
