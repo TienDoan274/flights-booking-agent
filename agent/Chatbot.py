@@ -404,7 +404,7 @@ class BookFlow(Workflow):
     async def clean_up(self, ctx: Context, ev: CleanUp) -> StopEvent:
         client = await ctx.get('mongo_client', None)
         submit_form = await ctx.get('mongoDB_query', None)
-        flight_info = await ctx.get('flight_info', None)
+        flight_info = await ctx.get('flight_info', "NO FLIGHTS AVAILABLE!")
 
         print(f'Booking flow : {submit_form}')
 
@@ -413,12 +413,13 @@ class BookFlow(Workflow):
             print("MongoDB client closed from Booking flow.")
         print('ev.payload:',ev.payload)
         if ev.payload == 'There is no available flights with that flight id':  
-            result = 'Booking submission has failed, please try again'
+            result = 'There is no available flights with that flight id'
         else:
             if not submit_form:
                 receipt_form = "No booking information available."
             else: 
                 receipt_form = f"""
+                
             User information: {submit_form},\nBooked flight information: {flight_info}
 """.strip()
             result = f'Booking submission has succeeded. Booking Receipt: \n{receipt_form}\n'
