@@ -389,7 +389,7 @@ class BookFlow(Workflow):
             w = MongoDBflow(timeout=30, verbose=False)
             flight_info = await w.run(query= {'flight_id': flight_id_val,'date':mongoDB_query['date_book']})
             print('flight_info:',flight_info)
-            if 'no flights available' in flight_info.lower() or flight_info==None:
+            if flight_info==None:
                 flight_info = 'USER CANNOT BOOK FLIGHT BECAUSE FLIGHT_ID DOES NOT EXIST!'
                 return CleanUp(payload='There is no available flights with that flight id')
             else:
