@@ -1,14 +1,18 @@
+#agent/Chatbot.py
 from dotenv import load_dotenv
 import os
 import sys
-
+import utils
 # set your OPENAI_API_KEY in .env file
 parent_dir = os.path.dirname(os.path.dirname(__file__))
 sys.path.append(parent_dir)
 from constant import *
+import gradio as gr
+import nest_asyncio
 
 dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
 load_dotenv(dotenv_path)
+from llama_index.agent.openai import OpenAIAgent
 
 import prompts
 from llama_index.llms.openai import OpenAI
@@ -35,6 +39,9 @@ from pydantic import BaseModel
 from enum import Enum
 import json
 from bson import ObjectId
+from elasticsearch import Elasticsearch
+from qdrant_client import QdrantClient
+from llama_index.embeddings.openai import OpenAIEmbedding
 
 class FlightSchema(BaseModel):
     start_time:Optional[str] = None
@@ -102,11 +109,7 @@ class MongoEncoder(json.JSONEncoder):
         if isinstance(obj, ObjectId):
             return str(obj)
         return super().default(obj)
-from elasticsearch import Elasticsearch
-from qdrant_client import QdrantClient
-from llama_index.embeddings.openai import OpenAIEmbedding
 
-#from sentence_transformers import CrossEncoder
 
 async def query_regulation(query: str, semantic_weight: float = 0.7, keyword_weight: float = 0.3) -> str:
     qdrant_client = QdrantClient(QDRANT_HOST)
@@ -114,7 +117,7 @@ async def query_regulation(query: str, semantic_weight: float = 0.7, keyword_wei
     embed_model = OpenAIEmbedding(model=EMBEDDING_MODEL)
     
     query_embedding = embed_model.get_text_embedding(query)
-    top_k = 10  
+    top_k = 6  
     
     qdrant_results = qdrant_client.search(
         collection_name="regulations",
@@ -122,7 +125,6 @@ async def query_regulation(query: str, semantic_weight: float = 0.7, keyword_wei
         limit=top_k
     )
 
-    # Get Elasticsearch results
     es_results = es.search(
         index="regulations",
         body={
@@ -141,7 +143,6 @@ async def query_regulation(query: str, semantic_weight: float = 0.7, keyword_wei
     combined_results = []
     seen_texts = set()
 
-    # Process Qdrant results with normalized scores
     for hit in qdrant_results:
         text = hit.payload.get("text")
         if text not in seen_texts:
@@ -150,17 +151,15 @@ async def query_regulation(query: str, semantic_weight: float = 0.7, keyword_wei
                 "text": text,
                 "filename": hit.payload.get("filename"),
                 "semantic_score": normalized_score,
-                "keyword_score": 0,  # Will be updated if found in ES results
+                "keyword_score": 0,  
                 "source": "qdrant"
             })
             seen_texts.add(text)
 
-    # Process and merge Elasticsearch results
     for hit in es_results["hits"]["hits"]:
         text = hit["_source"]["text"]
         normalized_score = hit["_score"] / max_es_score
         
-        # Check if text already exists from Qdrant results
         existing_result = next((r for r in combined_results if r["text"] == text), None)
         if existing_result:
             existing_result["keyword_score"] = normalized_score
@@ -168,7 +167,7 @@ async def query_regulation(query: str, semantic_weight: float = 0.7, keyword_wei
             combined_results.append({
                 "text": text,
                 "filename": hit["_source"]["filename"],
-                "semantic_score": 0,  # Not found in Qdrant results
+                "semantic_score": 0,  
                 "keyword_score": normalized_score,
                 "source": "elasticsearch"
             })
@@ -216,7 +215,6 @@ class MongoDBflow(Workflow):
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid query format: {query_str}") from e
 
-        #print(f'Initial query: {db_query}')
         await ctx.set('mongoDB_query', db_query)
 
         ctx.send_event(ConnectDB_Event(payload=''))
@@ -224,8 +222,7 @@ class MongoDBflow(Workflow):
 
     @step
     async def checking_query(self, ctx: Context, ev: QueryGeneration_Event) -> QueryGenerationComplete_Event:
-        # PERFORM CHECKING VALID QUERY
-        # ensure all field are filled
+        
         if not isinstance(ev.payload, dict):
             raise ValueError("Input is not valid query object")
         
@@ -257,7 +254,6 @@ class MongoDBflow(Workflow):
             collection = await ctx.get('collection')
             mongoDB_query = await ctx.get('mongoDB_query')
 
-            # Convert string to dictionary if it's a string
             if isinstance(mongoDB_query, str):
                 mongoDB_query = eval(mongoDB_query)  # or json.loads(mongoDB_query)
 
@@ -273,7 +269,6 @@ class MongoDBflow(Workflow):
             elif end_time:
                 final_query["departure_time"] = {"$lte": end_time}
                     
-            # Handle other fields
             if mongoDB_query.get('departure_region_name'):
                 final_query['departure_region_name'] = mongoDB_query['departure_region_name']
                     
@@ -291,7 +286,6 @@ class MongoDBflow(Workflow):
             if mongoDB_query.get('date'):
                 final_query['date'] = mongoDB_query['date']
             print(final_query)
-            # Execute query and retrieve data - with proper await
             cursor = collection.find(final_query)
             retrieved_data = cursor.to_list(length=None)
             await ctx.set('retrieved_data', retrieved_data)
@@ -319,7 +313,7 @@ class MongoDBflow(Workflow):
         else: 
             formatted_string = "\n".join(
                         json.dumps(self.filter_item(item), indent=4, cls=MongoEncoder) 
-                        for item in retrieved_data
+                        for item in retrieved_data[:8]
                     )        
         #print(formatted_string)
         observation = f"Only show users the fields which are not empty. Retrieved flights: \n{formatted_string}"
@@ -393,9 +387,13 @@ class BookFlow(Workflow):
             flight_id_val = mongoDB_query['flight_id']
             w = MongoDBflow(timeout=30, verbose=False)
             flight_info = await w.run(query= {'flight_id': flight_id_val,'date':mongoDB_query['date_book']})
-            
+            print('flight_info:',flight_info)
+            if 'no flights available' in flight_info.lower() or flight_info==None:
+                flight_info = 'USER CANNOT BOOK FLIGHT BECAUSE FLIGHT_ID DOES NOT EXIST!'
+                return CleanUp(payload='There is no available flights with that flight id')
+            else:
+                collection.insert_one(mongoDB_query)
             await ctx.set('flight_info', flight_info)
-            collection.insert_one(mongoDB_query)
             return CleanUp(payload='Submit booking data success')
         except Exception as e:
             print(f"Error during booking submission: {str(e)}")
@@ -405,24 +403,22 @@ class BookFlow(Workflow):
     async def clean_up(self, ctx: Context, ev: CleanUp) -> StopEvent:
         client = await ctx.get('mongo_client', None)
         submit_form = await ctx.get('mongoDB_query', None)
-        flight_info = await ctx.get('flight_info', None)
-
-        if 'no flights available' in flight_info.lower():
-            flight_info = 'USER CANNOT BOOK FLIGHT BECAUSE FLIGHT_ID DOES NOT EXIST!'
+        flight_info = await ctx.get('flight_info', "NO FLIGHTS AVAILABLE!")
 
         print(f'Booking flow : {submit_form}')
 
         if client:
             client.close()
             print("MongoDB client closed from Booking flow.")
-        
-        if ev.payload == 'Submit booking data failed':  # empty list
-            result = 'Booking submission has failed, please try again'
+        print('ev.payload:',ev.payload)
+        if ev.payload == 'There is no available flights with that flight id':  
+            result = 'There is no available flights with that flight id'
         else:
             if not submit_form:
                 receipt_form = "No booking information available."
             else: 
                 receipt_form = f"""
+                
             User information: {submit_form},\nBooked flight information: {flight_info}
 """.strip()
             result = f'Booking submission has succeeded. Booking Receipt: \n{receipt_form}\n'
@@ -472,7 +468,7 @@ class GatherInformation(Workflow):
         
         intent = await ctx.get('Intent')
         if intent == IntentType.QUERY:
-            simplified_prompt = PromptTemplate(prompts.PARSE_PROMPTS_RETRIVE)
+            simplified_prompt = PromptTemplate(prompts.PARSE_PROMPTS_RETRIEVE)
             target_schema = FlightSchema
         if intent == IntentType.BOOKING:
             simplified_prompt = PromptTemplate(prompts.PARSE_PROMPTS_BOOKING)
@@ -532,7 +528,7 @@ class GatherInformation(Workflow):
         updatedTime = tmp.get('updated_time', None)
         dateTime = tmp.get('date', None)
         status = tmp.get('status',None)
-
+        
         if tmp.get('departure_region_name'):
             region_name = tmp['departure_region_name']
             fixed_region = utils.match_region(region_name)
@@ -550,8 +546,7 @@ class GatherInformation(Workflow):
             else:
                 # Use a regex to match any region or similar patterns
                 tmp['arrival_region_name'] = None
-
-
+                
         if datebookTime is not None:
             parsedDatebook = parseTime(datebookTime)
             tmp['date_book'] = parsedDatebook
@@ -606,78 +601,39 @@ async def retrieve_regulation(user_query: str) -> str:
     RAGdata = await query_regulation(query=user_query)
     return RAGdata
 
-from llama_index.agent.openai import OpenAIAgent
-import nest_asyncio
+
+
 nest_asyncio.apply()
 
-async def main():
-    # Define the MongoDB Retriever tool
-    read_mongodb_tool = FunctionTool.from_defaults(
-        async_fn=read_mongodb,
-        name='MongoDB_Retriever',
-        description=(
-            'Tool to retrieve information from the MongoDB database. This tool is used after got a valid MongoDB query.'
-        )
-    )
-
-    RAG_regulation_tool = FunctionTool.from_defaults(
-        async_fn=retrieve_regulation,
-        name='RegulationRAG_tool',
-        description=(
-            'Tool to retrive general regulations for Air Travel. No need to change user query'
-        )
-    )
-
-    booking_submit_tool = FunctionTool.from_defaults(
-        async_fn=submit_booking,
-        name="SubmitBooking_Tool",
-        description=(
-            'Tool to submit booking information to MongoDB database. This tool is used to after got a valid MongoDB query.'
-        )
-    )
-
-    # Define the Query Preparation tool
-    prepare_input_tool = FunctionTool.from_defaults(
-        async_fn=prepare_input,
-        name='Query_Prep',
-        description=(
-            'Tool to generate a Query from user input. Ensure user input is complete and accurate before invoking this tool.'
-        )
-    )
-
-    tools = [prepare_input_tool, read_mongodb_tool, booking_submit_tool, RAG_regulation_tool]
-
-    # Initialize the OpenAI language model
-    llm = OpenAI(
-        model='gpt-3.5-turbo',
-        logprobs=None,  # Thêm tham số này
-        default_headers={},  # Thêm tham số này
-    )
-
-    # Initialize the agent with tools and prompt
-    agent = OpenAIAgent.from_tools(tools, llm=llm, verbose=True, system_prompt=prompts.SYSTEM_PROMPT)
-
-    def cleanup():
-        pass
-
-    try:
-        print("Flight assistant is ready to assist. Type your query below:")
-        while True:
-            user_input = input("USER: ").strip()
-            if user_input.lower() in ['exit', 'quit']:
-                print("Goodbye! Have a great day!")
-                cleanup()
-                break
-
-            # Run the agent and handle user queries
-            response = agent.chat(user_input)
-
-            print(f"AGENT: {response}")
-    except KeyboardInterrupt:
-        print("\nExiting. Goodbye!")
-    except Exception as e:
-        print(f"An error occurred: {e}")
+def initialize_agent():
+    tools = [
+        FunctionTool.from_defaults(async_fn=prepare_input, name='Query_Prep', 
+            description='Tool to generate a Query from user input.'),
+        FunctionTool.from_defaults(async_fn=read_mongodb, name='MongoDB_Retriever',
+            description='Tool to retrieve information from MongoDB database.'),
+        FunctionTool.from_defaults(async_fn=submit_booking, name="SubmitBooking_Tool",
+            description='Tool to submit booking information to MongoDB.'),
+        FunctionTool.from_defaults(async_fn=retrieve_regulation, name='RegulationRAG_tool',
+            description='Tool to retrieve general regulations for Air Travel.')
+    ]
     
-if __name__ == '__main__':
-    import asyncio
-    asyncio.run(main())
+    llm = OpenAI(model='gpt-3.5-turbo', logprobs=None, default_headers={})
+    return OpenAIAgent.from_tools(tools, llm=llm, verbose=True, system_prompt=prompts.SYSTEM_PROMPT)
+
+agent = initialize_agent()
+
+def chat(message, history):
+    try:
+        response = agent.chat(message)
+        return str(response)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+demo = gr.ChatInterface(
+    fn=chat,
+    title="Flight Assistant",
+    description="Hãy nhập câu hỏi của bạn bên dưới:"
+)
+
+if __name__ == "__main__":
+    demo.launch()
