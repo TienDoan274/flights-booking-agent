@@ -214,7 +214,6 @@ class MongoDBflow(Workflow):
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid query format: {query_str}") from e
 
-        #print(f'Initial query: {db_query}')
         await ctx.set('mongoDB_query', db_query)
 
         ctx.send_event(ConnectDB_Event(payload=''))
@@ -222,8 +221,7 @@ class MongoDBflow(Workflow):
 
     @step
     async def checking_query(self, ctx: Context, ev: QueryGeneration_Event) -> QueryGenerationComplete_Event:
-        # PERFORM CHECKING VALID QUERY
-        # ensure all field are filled
+        
         if not isinstance(ev.payload, dict):
             raise ValueError("Input is not valid query object")
         
@@ -389,7 +387,7 @@ class BookFlow(Workflow):
             w = MongoDBflow(timeout=30, verbose=False)
             flight_info = await w.run(query= {'flight_id': flight_id_val,'date':mongoDB_query['date_book']})
             print('flight_info:',flight_info)
-            if flight_info==None:
+            if 'no flights available' in flight_info.lower() or flight_info==None:
                 flight_info = 'USER CANNOT BOOK FLIGHT BECAUSE FLIGHT_ID DOES NOT EXIST!'
                 return CleanUp(payload='There is no available flights with that flight id')
             else:
